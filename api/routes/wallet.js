@@ -21,7 +21,7 @@ router.get('/balance', auth, async (req, res) => {
 
 router.post('/fund', auth, async (req, res) => {
   try {
-    const { amount } = req.body;
+    const { amount, source } = req.body;
     const numericAmount = Number(amount);
     if (!numericAmount || numericAmount <= 0) {
       return res.status(400).json({ error: 'Invalid amount' });
@@ -34,12 +34,18 @@ router.post('/fund', auth, async (req, res) => {
     user.walletBalance += numericAmount;
     await user.save();
 
+    const sourceLabel =
+      source && typeof source === 'object'
+        ? [source.bankName, source.last4 ? `**** ${source.last4}` : null].filter(Boolean).join(' ')
+        : null;
+
     await Transaction.create({
       userId: user._id,
       type: 'credit',
       amount: numericAmount,
       category: 'TRANSFER',
-      description: 'Wallet funding',
+      description: sourceLabel ? `Wallet funding from ${sourceLabel}` : 'Wallet funding',
+      merchant: source?.bankName || undefined,
       reference: `FUND-${Date.now()}`,
       balanceBefore,
       balanceAfter: user.walletBalance
