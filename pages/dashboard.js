@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/router'
 import toast from 'react-hot-toast'
 import { parseTransaction, detectLeaks } from '../lib/parser'
@@ -6,6 +6,7 @@ import { api } from '../lib/api'
 
 const TABS = [
   { id: 'home', label: 'Home', icon: '🏠' },
+  { id: 'cards', label: 'Cards', icon: '💳' },
   { id: 'savings', label: 'Savings', icon: '💰' },
   { id: 'insights', label: 'Insights', icon: '📊' },
   { id: 'history', label: 'History', icon: '📜' }
@@ -19,15 +20,20 @@ export default function Dashboard() {
   const [transactions, setTransactions] = useState([])
   const [goals, setGoals] = useState([])
   const [insights, setInsights] = useState({ categorySpending: [], totalSpent: 0 })
+  const [cards, setCards] = useState([])
   const [showFundModal, setShowFundModal] = useState(false)
+  const [showCardModal, setShowCardModal] = useState(false)
   const [showSMSModal, setShowSMSModal] = useState(false)
   const [showGoalModal, setShowGoalModal] = useState(false)
   const [fundAmount, setFundAmount] = useState('')
+  const [selectedFundingCard, setSelectedFundingCard] = useState(null)
   const [smsText, setSmsText] = useState('')
+  const [cardForm, setCardForm] = useState({ bankName: '', cardHolder: '', cardNumber: '', expiry: '' })
   const [goalForm, setGoalForm] = useState({ title: '', targetAmount: '' })
   const [selectedGoal, setSelectedGoal] = useState(null)
   const [savingsAmount, setSavingsAmount] = useState('')
   const [loading, setLoading] = useState(false)
+  const [showAmounts, setShowAmounts] = useState(true)
 
   useEffect(() => {
     if (!localStorage.getItem('user')) {
@@ -36,8 +42,29 @@ export default function Dashboard() {
     }
     const user = JSON.parse(localStorage.getItem('user'))
     setUserInitial(user.firstName?.charAt(0) || 'O')
+    const privacy = localStorage.getItem('owomi_show_amounts')
+    if (privacy !== null) {
+      setShowAmounts(privacy === 'true')
+    }
+    const savedCards = localStorage.getItem('owomi_cards')
+    if (savedCards) {
+      setCards(JSON.parse(savedCards))
+    }
     loadData()
   }, [router])
+
+  const persistCards = (nextCards) => {
+    setCards(nextCards)
+    localStorage.setItem('owomi_cards', JSON.stringify(nextCards))
+  }
+
+  const toggleAmountPrivacy = () => {
+    setShowAmounts((prev) => {
+      const next = !prev
+      localStorage.setItem('owomi_show_amounts', String(next))
+      return next
+    })
+  }
 
   const toNumber = (value) => {
     const n = Number(value)
@@ -79,7 +106,10 @@ export default function Dashboard() {
     e.preventDefault()
     setLoading(true)
     try {
-      const result = await api.fundWallet(parseFloat(fundAmount))
+      const result = await api.fundWallet(parseFloat(fundAmount), selectedFundingCard ? {
+        bankName: selectedFundingCard.bankName,
+        last4: selectedFundingCard.last4
+      } : null)
       if (result?.error) {
         throw new Error(result.error)
       }
@@ -95,6 +125,7 @@ export default function Dashboard() {
       })
       setShowFundModal(false)
       setFundAmount('')
+      setSelectedFundingCard(null)
       loadData()
     } catch (error) {
       toast.error('Funding failed')
@@ -169,6 +200,115 @@ export default function Dashboard() {
     }
   }
 
+  const handleAddCard = (e) => {
+    e.preventDefault()
+    const number = String(cardForm.cardNumber || '').replace(/\s+/g, '')
+    if (number.length < 12) {
+      toast.error('Enter a valid card number')
+      return
+    }
+
+    const newCard = {
+      id: Date.now().toString(),
+      bankName: cardForm.bankName.trim() || 'Bank Card',
+      cardHolder: cardForm.cardHolder.trim() || 'Card Holder',
+      last4: number.slice(-4),
+      expiry: cardForm.expiry || '--/--'
+    }
+
+    persistCards([newCard, ...cards])
+    setCardForm({ bankName: '', cardHolder: '', cardNumber: '', expiry: '' })
+    setShowCardModal(false)
+    toast.success('Card added')
+  }
+
+  const handleDeleteCard = (cardId) => {
+    const next = cards.filter((card) => card.id !== cardId)
+    persistCards(next)
+    if (selectedFundingCard?.id === cardId) {
+      setSelectedFundingCard(null)
+    }
+  }
+
+  const handleOpenFundFromCard = (card) => {
+    setSelectedFundingCard(card)
+    setShowFundModal(true)
+  }
+
+  const insightDetails = useMemo(() => {
+    const debits = transactions.filter((tx) => tx.type === 'debit')
+    const total = debits.reduce((sum, tx) => sum + toNumber(tx.amount), 0)
+    const average = debits.length ? total / debits.length : 0
+    const byCategory = {}
+    const byMerchant = {}
+
+    debits.forEach((tx) => {
+      const category = tx.category || 'OTHER'
+      const amount = toNumber(tx.amount)
+      const merchant = (tx.merchant || tx.description || '').trim() || 'Unknown Merchant'
+
+      if (!byCategory[category]) {
+        byCategory[category] = { category, total: 0, count: 0, merchants: {} }
+      }
+      byCategory[category].total += amount
+      byCategory[category].count += 1
+      byCategory[category].merchants[merchant] = (byCategory[category].merchants[merchant] || 0) + amount
+
+      byMerchant[merchant] = (byMerchant[merchant] || 0) + amount
+    })
+
+    const categories = Object.values(byCategory)
+      .map((item) => {
+        const topMerchantEntry = Object.entries(item.merchants).sort((a, b) => b[1] - a[1])[0]
+        return {
+          category: item.category,
+          total: item.total,
+          count: item.count,
+          percentage: total ? (item.total / total) * 100 : 0,
+          topMerchant: topMerchantEntry ? topMerchantEntry[0] : 'Unknown Merchant'
+        }
+      })
+      .sort((a, b) => b.total - a.total)
+
+    const topMerchants = Object.entries(byMerchant)
+      .map(([merchant, amount]) => ({ merchant, amount }))
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 5)
+
+    return {
+      total,
+      average,
+      topCategory: categories[0] || null,
+      categories,
+      topMerchants
+    }
+  }, [transactions])
+
+  const leakAlerts = useMemo(() => {
+    const debitTx = transactions.filter((tx) => tx.type === 'debit')
+    if (!debitTx.length) return []
+
+    const bets = debitTx.filter((tx) => (tx.category || '').toUpperCase() === 'BETTING')
+    const pos = debitTx.filter((tx) => (tx.category || '').toUpperCase() === 'POS')
+    const transfers = debitTx.filter((tx) => (tx.category || '').toUpperCase() === 'TRANSFER')
+
+    const alerts = []
+    const betTotal = bets.reduce((sum, tx) => sum + toNumber(tx.amount), 0)
+    if (betTotal >= 5000) {
+      alerts.push(`Betting spend is high this period (₦${formatCurrency(betTotal)}).`)
+    }
+
+    if (pos.length >= 5) {
+      alerts.push(`Frequent POS usage (${pos.length} times). Fees may be leaking value.`)
+    }
+
+    if (transfers.length >= 8) {
+      alerts.push(`You make many transfers (${transfers.length}). Track recurring destinations.`)
+    }
+
+    return alerts
+  }, [transactions])
+
   return (
     <div className="app-container">
       <div className="app-wrapper">
@@ -187,15 +327,24 @@ export default function Dashboard() {
             {activeTab === 'home' && (
               <>
                 <div className="balance-card">
-                  <p className="balance-label">Wallet Balance</p>
-                  <h2 className="balance-amount">₦{formatCurrency(balance?.walletBalance)}</h2>
+                  <div className="balance-head">
+                    <p className="balance-label">Wallet Balance</p>
+                    <button className="privacy-toggle" onClick={toggleAmountPrivacy}>
+                      {showAmounts ? '🙈 Hide' : '👁 Show'}
+                    </button>
+                  </div>
+                  <h2 className={`balance-amount ${!showAmounts ? 'masked' : ''}`}>₦{formatCurrency(balance?.walletBalance)}</h2>
                   <div className="balance-row">
-                    <div className="balance-badge">Savings: ₦{formatCurrency(balance?.savingsBalance)}</div>
-                    <div className="balance-badge">Total: ₦{formatCurrency(balance?.totalBalance)}</div>
+                    <div className={`balance-badge ${!showAmounts ? 'masked' : ''}`}>Savings: ₦{formatCurrency(balance?.savingsBalance)}</div>
+                    <div className={`balance-badge ${!showAmounts ? 'masked' : ''}`}>Total: ₦{formatCurrency(balance?.totalBalance)}</div>
                   </div>
                 </div>
 
                 <div className="action-grid">
+                  <button className="action-btn" onClick={() => setActiveTab('cards')}>
+                    <span>💳</span>
+                    <small>Bank Cards</small>
+                  </button>
                   <button className="action-btn" onClick={() => setShowFundModal(true)}>
                     <span>💳</span>
                     <small>Fund Wallet</small>
@@ -228,11 +377,38 @@ export default function Dashboard() {
                         <p>{new Date(tx.createdAt).toLocaleDateString()}</p>
                       </div>
                       <div className="tx-amount">
-                        <strong className={tx.type}>{tx.type === 'credit' ? '+' : '-'}₦{formatCurrency(tx.amount)}</strong>
+                        <strong className={`${tx.type} ${!showAmounts ? 'masked' : ''}`}>{tx.type === 'credit' ? '+' : '-'}₦{formatCurrency(tx.amount)}</strong>
                       </div>
                     </div>
                   ))}
                   {!transactions.length && <p className="empty-state">No transactions yet</p>}
+                </div>
+              </>
+            )}
+
+            {activeTab === 'cards' && (
+              <>
+                <div className="section-header">
+                  <h3>Bank Cards</h3>
+                  <button onClick={() => setShowCardModal(true)} className="link-btn">+ Add Card</button>
+                </div>
+
+                <div className="cards-list">
+                  {cards.map((card) => (
+                    <div className="bank-card" key={card.id}>
+                      <p className="bank-name">{card.bankName}</p>
+                      <h4>**** **** **** {card.last4}</h4>
+                      <div className="bank-card-meta">
+                        <span>{card.cardHolder}</span>
+                        <span>{card.expiry}</span>
+                      </div>
+                      <div className="goal-actions">
+                        <button className="btn-small" onClick={() => handleOpenFundFromCard(card)}>Fund with Card</button>
+                        <button className="btn-small-outline" onClick={() => handleDeleteCard(card.id)}>Remove</button>
+                      </div>
+                    </div>
+                  ))}
+                  {!cards.length && <p className="empty-state">No cards yet. Add one to fund your wallet faster.</p>}
                 </div>
               </>
             )}
@@ -255,7 +431,7 @@ export default function Dashboard() {
                         <div className="progress-bar">
                           <div className="progress-fill" style={{ width: `${Math.min((toNumber(goal.currentAmount) / Math.max(toNumber(goal.targetAmount), 1)) * 100, 100)}%` }}></div>
                         </div>
-                        <p>₦{formatCurrency(goal.currentAmount)} / ₦{formatCurrency(goal.targetAmount)}</p>
+                        <p className={!showAmounts ? 'masked' : ''}>₦{formatCurrency(goal.currentAmount)} / ₦{formatCurrency(goal.targetAmount)}</p>
                       </div>
                       <div className="goal-actions">
                         <button onClick={() => setSelectedGoal({ ...goal, action: 'add', id: goal._id || goal.id })} className="btn-small">Add Money</button>
@@ -272,24 +448,68 @@ export default function Dashboard() {
               <>
                 <div className="insights-hero">
                   <h2>Spending Insights</h2>
-                  <p className="total-spent">Total Spent: ₦{formatCurrency(insights?.totalSpent)}</p>
+                  <p className={`total-spent ${!showAmounts ? 'masked' : ''}`}>Total Spent: ₦{formatCurrency(insightDetails.total)}</p>
+                </div>
+
+                <div className="insight-summary-grid">
+                  <div className="summary-card">
+                    <p>Total Debits</p>
+                    <strong className={!showAmounts ? 'masked' : ''}>₦{formatCurrency(insightDetails.total)}</strong>
+                  </div>
+                  <div className="summary-card">
+                    <p>Average Spend</p>
+                    <strong className={!showAmounts ? 'masked' : ''}>₦{formatCurrency(insightDetails.average)}</strong>
+                  </div>
+                  <div className="summary-card">
+                    <p>Top Category</p>
+                    <strong>{insightDetails.topCategory?.category || 'N/A'}</strong>
+                  </div>
+                </div>
+
+                <div className="section-header">
+                  <h3>Leakage Watch</h3>
+                </div>
+                <div className="leakage-list">
+                  {leakAlerts.map((alert, index) => (
+                    <div className="leakage-item" key={index}>⚠️ {alert}</div>
+                  ))}
+                  {!leakAlerts.length && <p className="empty-state">No major leak patterns detected yet.</p>}
                 </div>
 
                 <div className="category-list">
-                  {insights.categorySpending.map((cat) => (
+                  {insightDetails.categories.map((cat) => (
                     <div className="category-card" key={cat.category}>
                       <div className="category-icon">{getCategoryIcon(cat.category)}</div>
                       <div className="category-details">
                         <strong>{cat.category}</strong>
-                        <p>{toNumber(cat.count)} transactions</p>
+                        <p>{toNumber(cat.count)} transactions · Top merchant: {cat.topMerchant}</p>
                       </div>
                       <div className="category-amount">
-                        <strong>₦{formatCurrency(cat.total)}</strong>
-                        <span>{toNumber(insights.totalSpent) ? ((toNumber(cat.total) / toNumber(insights.totalSpent)) * 100).toFixed(1) : '0.0'}%</span>
+                        <strong className={!showAmounts ? 'masked' : ''}>₦{formatCurrency(cat.total)}</strong>
+                        <span>{cat.percentage.toFixed(1)}%</span>
                       </div>
                     </div>
                   ))}
-                  {!insights.categorySpending.length && <p className="empty-state">No spending data yet</p>}
+                  {!insightDetails.categories.length && <p className="empty-state">No spending data yet</p>}
+                </div>
+
+                <div className="section-header">
+                  <h3>Top Merchants</h3>
+                </div>
+                <div className="transaction-list">
+                  {insightDetails.topMerchants.map((merchantItem, index) => (
+                    <div className="transaction-item" key={`${merchantItem.merchant}-${index}`}>
+                      <div className="tx-icon debit">↑</div>
+                      <div className="tx-details">
+                        <strong>{merchantItem.merchant}</strong>
+                        <p>High spend destination</p>
+                      </div>
+                      <div className="tx-amount">
+                        <strong className={`debit ${!showAmounts ? 'masked' : ''}`}>-₦{formatCurrency(merchantItem.amount)}</strong>
+                      </div>
+                    </div>
+                  ))}
+                  {!insightDetails.topMerchants.length && <p className="empty-state">No merchant pattern yet</p>}
                 </div>
               </>
             )}
@@ -309,7 +529,7 @@ export default function Dashboard() {
                         <p>{new Date(tx.createdAt).toLocaleString()}</p>
                       </div>
                       <div className="tx-amount">
-                        <strong className={tx.type}>{tx.type === 'credit' ? '+' : '-'}₦{formatCurrency(tx.amount)}</strong>
+                        <strong className={`${tx.type} ${!showAmounts ? 'masked' : ''}`}>{tx.type === 'credit' ? '+' : '-'}₦{formatCurrency(tx.amount)}</strong>
                         <span>{tx.source}</span>
                       </div>
                     </div>
@@ -332,12 +552,52 @@ export default function Dashboard() {
       </div>
 
       {showFundModal && (
-        <div className="modal-overlay" onClick={() => setShowFundModal(false)}>
+        <div className="modal-overlay" onClick={() => { setShowFundModal(false); setSelectedFundingCard(null) }}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <h3>Fund Wallet</h3>
+            {selectedFundingCard && (
+              <p className="modal-helper">
+                Source: {selectedFundingCard.bankName} • **** {selectedFundingCard.last4}
+              </p>
+            )}
             <form onSubmit={handleFundWallet}>
               <input type="number" placeholder="Amount" value={fundAmount} onChange={(e) => setFundAmount(e.target.value)} required />
               <button type="submit" disabled={loading}>{loading ? 'Processing...' : 'Fund Wallet'}</button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showCardModal && (
+        <div className="modal-overlay" onClick={() => setShowCardModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <h3>Add Bank Card</h3>
+            <form onSubmit={handleAddCard}>
+              <input
+                placeholder="Bank Name"
+                value={cardForm.bankName}
+                onChange={(e) => setCardForm({ ...cardForm, bankName: e.target.value })}
+                required
+              />
+              <input
+                placeholder="Card Holder Name"
+                value={cardForm.cardHolder}
+                onChange={(e) => setCardForm({ ...cardForm, cardHolder: e.target.value })}
+                required
+              />
+              <input
+                placeholder="Card Number"
+                value={cardForm.cardNumber}
+                onChange={(e) => setCardForm({ ...cardForm, cardNumber: e.target.value })}
+                required
+              />
+              <input
+                placeholder="Expiry (MM/YY)"
+                value={cardForm.expiry}
+                onChange={(e) => setCardForm({ ...cardForm, expiry: e.target.value })}
+                required
+              />
+              <button type="submit">Save Card</button>
             </form>
           </div>
         </div>
@@ -390,11 +650,13 @@ export default function Dashboard() {
         .avatar-btn { width: 44px; height: 44px; border-radius: 50%; background: rgba(255,255,255,0.2); border: 2px solid rgba(255,255,255,0.3); color: #fff; font-weight: 700; font-size: 18px; cursor: pointer; }
         .tab-content { flex: 1; padding: 20px; overflow-y: auto; padding-bottom: 100px; }
         .balance-card { background: linear-gradient(135deg, #00A86B 0%, #008751 100%); border-radius: 20px; padding: 24px; color: #fff; box-shadow: 0 8px 24px rgba(0,168,107,0.3); margin-bottom: 20px; }
+        .balance-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
         .balance-label { font-size: 14px; opacity: 0.9; margin: 0 0 8px; }
+        .privacy-toggle { background: rgba(255,255,255,0.2); color: #fff; border: 1px solid rgba(255,255,255,0.4); border-radius: 999px; padding: 6px 10px; font-size: 12px; font-weight: 700; cursor: pointer; }
         .balance-amount { font-size: 42px; font-weight: 800; margin: 0 0 12px; }
         .balance-row { display: flex; gap: 10px; }
         .balance-badge { background: rgba(255,255,255,0.2); padding: 8px 16px; border-radius: 20px; font-size: 13px; font-weight: 600; }
-        .action-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
+        .action-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 24px; }
         .action-btn { background: #f9f9f9; border: 2px solid #e5e5e5; border-radius: 16px; padding: 16px 8px; display: flex; flex-direction: column; align-items: center; gap: 8px; cursor: pointer; }
         .action-btn span { font-size: 28px; }
         .action-btn small { font-size: 11px; font-weight: 600; color: #333; }
@@ -428,6 +690,17 @@ export default function Dashboard() {
         .insights-hero { text-align: center; margin-bottom: 24px; }
         .insights-hero h2 { font-size: 28px; font-weight: 800; color: #1a1a1a; margin: 0 0 8px; }
         .total-spent { font-size: 20px; color: #00A86B; font-weight: 700; }
+        .insight-summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+        .summary-card { background: #fff; border: 2px solid #e5e5e5; border-radius: 14px; padding: 12px; }
+        .summary-card p { font-size: 11px; color: #777; margin: 0 0 6px; }
+        .summary-card strong { font-size: 14px; color: #1a1a1a; }
+        .leakage-list { display: grid; gap: 8px; margin-bottom: 14px; }
+        .leakage-item { background: #fff4f4; color: #a63b3b; border: 1px solid #ffd6d6; border-radius: 12px; padding: 10px 12px; font-size: 13px; }
+        .cards-list { display: grid; gap: 14px; }
+        .bank-card { background: linear-gradient(135deg, #143e63 0%, #0f2d47 100%); color: #fff; border-radius: 16px; padding: 18px; box-shadow: 0 8px 20px rgba(15, 45, 71, 0.35); }
+        .bank-name { font-size: 12px; opacity: 0.9; margin: 0 0 8px; }
+        .bank-card h4 { font-size: 22px; letter-spacing: 2px; margin: 0 0 12px; }
+        .bank-card-meta { display: flex; justify-content: space-between; font-size: 12px; opacity: 0.9; margin-bottom: 12px; }
         .category-list { display: grid; gap: 12px; }
         .category-card { background: #fff; border: 2px solid #e5e5e5; border-radius: 16px; padding: 16px; display: grid; grid-template-columns: 50px 1fr auto; gap: 12px; align-items: center; }
         .category-icon { width: 50px; height: 50px; border-radius: 50%; background: #f0f0f0; display: flex; align-items: center; justify-content: center; font-size: 24px; }
@@ -436,15 +709,17 @@ export default function Dashboard() {
         .category-amount { text-align: right; }
         .category-amount strong { font-size: 18px; color: #1a1a1a; display: block; }
         .category-amount span { font-size: 12px; color: #666; }
-        .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid #e5e5e5; display: grid; grid-template-columns: repeat(4, 1fr); padding: 8px 0; box-shadow: 0 -2px 10px rgba(0,0,0,0.05); }
+        .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid #e5e5e5; display: grid; grid-template-columns: repeat(5, 1fr); padding: 8px 0; box-shadow: 0 -2px 10px rgba(0,0,0,0.05); }
         .bottom-nav button { background: none; border: none; display: flex; flex-direction: column; align-items: center; gap: 4px; color: #999; cursor: pointer; padding: 8px; }
         .bottom-nav button span { font-size: 24px; }
         .bottom-nav button small { font-size: 11px; font-weight: 600; }
         .bottom-nav button.active { color: #00A86B; }
+        .masked { filter: blur(8px); user-select: none; }
         .empty-state { text-align: center; color: #999; padding: 32px 16px; font-size: 14px; }
         .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px; }
         .modal-content { background: #fff; border-radius: 20px; padding: 24px; max-width: 400px; width: 100%; }
         .modal-content h3 { font-size: 20px; font-weight: 700; margin: 0 0 16px; }
+        .modal-helper { font-size: 13px; color: #555; margin: -6px 0 12px; }
         .modal-content input, .modal-content textarea { width: 100%; padding: 12px; border: 2px solid #e5e5e5; border-radius: 10px; font-size: 14px; margin-bottom: 12px; }
         .modal-content textarea { min-height: 120px; resize: vertical; }
         .modal-content button { width: 100%; padding: 14px; background: #00A86B; color: #fff; border: none; border-radius: 10px; font-weight: 700; cursor: pointer; }
