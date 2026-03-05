@@ -1,0 +1,8 @@
+node_modules
+.next
+app
+build.gradle
+settings.gradle
+gradle.properties
+.env
+api/.env

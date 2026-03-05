@@ -1,0 +1,21 @@
+{
+  "name": "Owó Mi - The Truth-Teller",
+  "short_name": "Owó Mi",
+  "description": "Nigerian personal finance tracker that shows where your money is leaking",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#00A86B",
+  "theme_color": "#00A86B",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

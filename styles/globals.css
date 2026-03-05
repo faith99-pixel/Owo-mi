@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: linear-gradient(135deg, #00A86B 0%, #008751 100%);
+  min-height: 100vh;
+}
+
+:root {
+  --primary: #00A86B;
+  --secondary: #FDB913;
+  --danger: #E63946;
+  --success: #06D6A0;
+  --dark: #1A1A2E;
+  --light: #F8F9FA;
+}
+
+@media (max-width: 768px) {
+  body {
+    font-size: 14px;
+  }
+}
