@@ -1,14 +1,16 @@
 const express = require('express');
 const router = express.Router();
-const db = require('../config/database');
+const User = require('../models/User');
 const auth = require('../middleware/auth');
 
-// Get virtual account details
 router.get('/', auth, async (req, res) => {
   try {
-    const [users] = await db.query('SELECT virtualAccountNumber, virtualAccountBank, firstName, lastName FROM users WHERE id = ?', [req.userId]);
-    const user = users[0];
-    
+    const user = await User.findById(req.userId).select(
+      'virtualAccountNumber virtualAccountBank firstName lastName'
+    );
+
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
     res.json({
       accountNumber: user.virtualAccountNumber,
       accountBank: user.virtualAccountBank,

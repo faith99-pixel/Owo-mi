@@ -39,6 +39,22 @@ export default function Dashboard() {
     loadData()
   }, [router])
 
+  const toNumber = (value) => {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : 0
+  }
+
+  const formatCurrency = (value) => toNumber(value).toLocaleString()
+
+  const normalizeBalance = (data) => {
+    const walletBalance = toNumber(data?.walletBalance)
+    const savingsBalance = toNumber(data?.savingsBalance)
+    const totalBalance = toNumber(
+      data?.totalBalance !== undefined ? data.totalBalance : walletBalance + savingsBalance
+    )
+    return { walletBalance, savingsBalance, totalBalance }
+  }
+
   const loadData = async () => {
     try {
       const [balanceData, transactionsData, goalsData, insightsData] = await Promise.all([
@@ -47,10 +63,13 @@ export default function Dashboard() {
         api.getGoals(),
         api.getInsights()
       ])
-      setBalance(balanceData)
-      setTransactions(transactionsData)
-      setGoals(goalsData)
-      setInsights(insightsData)
+      setBalance(normalizeBalance(balanceData))
+      setTransactions(Array.isArray(transactionsData) ? transactionsData : [])
+      setGoals(Array.isArray(goalsData) ? goalsData : [])
+      setInsights({
+        categorySpending: Array.isArray(insightsData?.categorySpending) ? insightsData.categorySpending : [],
+        totalSpent: toNumber(insightsData?.totalSpent)
+      })
     } catch (error) {
       console.error('Load error:', error)
     }
@@ -61,8 +80,19 @@ export default function Dashboard() {
     setLoading(true)
     try {
       const result = await api.fundWallet(parseFloat(fundAmount))
+      if (result?.error) {
+        throw new Error(result.error)
+      }
       toast.success('Wallet funded!')
-      setBalance({ ...balance, walletBalance: result.newBalance })
+      setBalance((prev) => {
+        const nextWallet = toNumber(result.newBalance)
+        const nextSavings = toNumber(prev?.savingsBalance)
+        return {
+          walletBalance: nextWallet,
+          savingsBalance: nextSavings,
+          totalBalance: nextWallet + nextSavings
+        }
+      })
       setShowFundModal(false)
       setFundAmount('')
       loadData()
@@ -158,10 +188,10 @@ export default function Dashboard() {
               <>
                 <div className="balance-card">
                   <p className="balance-label">Wallet Balance</p>
-                  <h2 className="balance-amount">₦{balance.walletBalance.toLocaleString()}</h2>
+                  <h2 className="balance-amount">₦{formatCurrency(balance?.walletBalance)}</h2>
                   <div className="balance-row">
-                    <div className="balance-badge">Savings: ₦{balance.savingsBalance.toLocaleString()}</div>
-                    <div className="balance-badge">Total: ₦{balance.totalBalance.toLocaleString()}</div>
+                    <div className="balance-badge">Savings: ₦{formatCurrency(balance?.savingsBalance)}</div>
+                    <div className="balance-badge">Total: ₦{formatCurrency(balance?.totalBalance)}</div>
                   </div>
                 </div>
 
@@ -190,15 +220,15 @@ export default function Dashboard() {
                 </div>
 
                 <div className="transaction-list">
-                  {transactions.slice(0, 5).map((tx) => (
-                    <div className="transaction-item" key={tx.id}>
+                  {transactions.slice(0, 5).map((tx, index) => (
+                    <div className="transaction-item" key={tx._id || tx.id || index}>
                       <div className={`tx-icon ${tx.type}`}>{tx.type === 'credit' ? '↓' : '↑'}</div>
                       <div className="tx-details">
                         <strong>{tx.description || tx.category}</strong>
                         <p>{new Date(tx.createdAt).toLocaleDateString()}</p>
                       </div>
                       <div className="tx-amount">
-                        <strong className={tx.type}>{tx.type === 'credit' ? '+' : '-'}₦{parseFloat(tx.amount).toLocaleString()}</strong>
+                        <strong className={tx.type}>{tx.type === 'credit' ? '+' : '-'}₦{formatCurrency(tx.amount)}</strong>
                       </div>
                     </div>
                   ))}
@@ -215,21 +245,21 @@ export default function Dashboard() {
                 </div>
 
                 <div className="goals-list">
-                  {goals.map((goal) => (
-                    <div className="goal-card" key={goal.id}>
+                  {goals.map((goal, index) => (
+                    <div className="goal-card" key={goal._id || goal.id || index}>
                       <div className="goal-header">
                         <h4>{goal.title}</h4>
                         <span className="goal-emoji">{goal.emoji}</span>
                       </div>
                       <div className="goal-progress">
                         <div className="progress-bar">
-                          <div className="progress-fill" style={{ width: `${Math.min((parseFloat(goal.currentAmount) / parseFloat(goal.targetAmount)) * 100, 100)}%` }}></div>
+                          <div className="progress-fill" style={{ width: `${Math.min((toNumber(goal.currentAmount) / Math.max(toNumber(goal.targetAmount), 1)) * 100, 100)}%` }}></div>
                         </div>
-                        <p>₦{parseFloat(goal.currentAmount).toLocaleString()} / ₦{parseFloat(goal.targetAmount).toLocaleString()}</p>
+                        <p>₦{formatCurrency(goal.currentAmount)} / ₦{formatCurrency(goal.targetAmount)}</p>
                       </div>
                       <div className="goal-actions">
-                        <button onClick={() => setSelectedGoal({ ...goal, action: 'add' })} className="btn-small">Add Money</button>
-                        <button onClick={() => setSelectedGoal({ ...goal, action: 'withdraw' })} className="btn-small-outline">Withdraw</button>
+                        <button onClick={() => setSelectedGoal({ ...goal, action: 'add', id: goal._id || goal.id })} className="btn-small">Add Money</button>
+                        <button onClick={() => setSelectedGoal({ ...goal, action: 'withdraw', id: goal._id || goal.id })} className="btn-small-outline">Withdraw</button>
                       </div>
                     </div>
                   ))}
@@ -242,7 +272,7 @@ export default function Dashboard() {
               <>
                 <div className="insights-hero">
                   <h2>Spending Insights</h2>
-                  <p className="total-spent">Total Spent: ₦{insights.totalSpent.toLocaleString()}</p>
+                  <p className="total-spent">Total Spent: ₦{formatCurrency(insights?.totalSpent)}</p>
                 </div>
 
                 <div className="category-list">
@@ -251,11 +281,11 @@ export default function Dashboard() {
                       <div className="category-icon">{getCategoryIcon(cat.category)}</div>
                       <div className="category-details">
                         <strong>{cat.category}</strong>
-                        <p>{cat.count} transactions</p>
+                        <p>{toNumber(cat.count)} transactions</p>
                       </div>
                       <div className="category-amount">
-                        <strong>₦{cat.total.toLocaleString()}</strong>
-                        <span>{((cat.total / insights.totalSpent) * 100).toFixed(1)}%</span>
+                        <strong>₦{formatCurrency(cat.total)}</strong>
+                        <span>{toNumber(insights.totalSpent) ? ((toNumber(cat.total) / toNumber(insights.totalSpent)) * 100).toFixed(1) : '0.0'}%</span>
                       </div>
                     </div>
                   ))}
@@ -271,15 +301,15 @@ export default function Dashboard() {
                 </div>
 
                 <div className="transaction-list">
-                  {transactions.map((tx) => (
-                    <div className="transaction-item" key={tx.id}>
+                  {transactions.map((tx, index) => (
+                    <div className="transaction-item" key={tx._id || tx.id || index}>
                       <div className={`tx-icon ${tx.type}`}>{tx.type === 'credit' ? '↓' : '↑'}</div>
                       <div className="tx-details">
                         <strong>{tx.description || tx.category}</strong>
                         <p>{new Date(tx.createdAt).toLocaleString()}</p>
                       </div>
                       <div className="tx-amount">
-                        <strong className={tx.type}>{tx.type === 'credit' ? '+' : '-'}₦{parseFloat(tx.amount).toLocaleString()}</strong>
+                        <strong className={tx.type}>{tx.type === 'credit' ? '+' : '-'}₦{formatCurrency(tx.amount)}</strong>
                         <span>{tx.source}</span>
                       </div>
                     </div>

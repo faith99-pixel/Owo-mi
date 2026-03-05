@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const db = require('./config/database');
+const mongoose = require('mongoose');
 require('dotenv').config();
 
 const authRoutes = require('./routes/auth');
@@ -14,31 +14,30 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Test MySQL connection
-db.getConnection()
-  .then(connection => {
-    console.log('✅ MySQL connected to owomi database');
-    connection.release();
-  })
-  .catch(err => {
-    console.error('❌ MySQL connection failed:', err.message);
-  });
-
-// Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/savings', savingsRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/virtual-account', virtualAccountRoutes);
 
-// Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'Owó Mi API is running', database: 'MySQL' });
+  res.json({ status: 'ok', message: 'Owo Mi API is running', database: 'MongoDB' });
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`🚀 Owó Mi API running on port ${PORT}`);
-});
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/owomi';
+
+mongoose
+  .connect(MONGODB_URI)
+  .then(() => {
+    console.log('MongoDB connected');
+    app.listen(PORT, () => {
+      console.log(`Owo Mi API running on port ${PORT}`);
+    });
+  })
+  .catch((error) => {
+    console.error('MongoDB connection failed:', error.message);
+    process.exit(1);
+  });
 
 module.exports = app;

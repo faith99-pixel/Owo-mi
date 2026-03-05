@@ -1,114 +1,154 @@
 const express = require('express');
 const router = express.Router();
-const db = require('../config/database');
+const User = require('../models/User');
+const Transaction = require('../models/Transaction');
 const auth = require('../middleware/auth');
 
-// Get wallet balance
 router.get('/balance', auth, async (req, res) => {
   try {
-    const [users] = await db.query('SELECT walletBalance, savingsBalance FROM users WHERE id = ?', [req.userId]);
-    const user = users[0];
-    
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
     res.json({
-      walletBalance: parseFloat(user.walletBalance),
-      savingsBalance: parseFloat(user.savingsBalance),
-      totalBalance: parseFloat(user.walletBalance) + parseFloat(user.savingsBalance)
+      walletBalance: user.walletBalance,
+      savingsBalance: user.savingsBalance,
+      totalBalance: user.walletBalance + user.savingsBalance
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Fund wallet
 router.post('/fund', auth, async (req, res) => {
   try {
     const { amount } = req.body;
-    
-    const [users] = await db.query('SELECT walletBalance FROM users WHERE id = ?', [req.userId]);
-    const balanceBefore = parseFloat(users[0].walletBalance);
-    const balanceAfter = balanceBefore + parseFloat(amount);
-    
-    await db.query('UPDATE users SET walletBalance = ? WHERE id = ?', [balanceAfter, req.userId]);
-    
-    const reference = 'FUND-' + Date.now();
-    await db.query(
-      'INSERT INTO transactions (userId, type, amount, category, description, reference, balanceBefore, balanceAfter, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [req.userId, 'credit', amount, 'FUNDING', 'Wallet funding', reference, balanceBefore, balanceAfter, 'wallet']
-    );
-    
-    res.json({ message: 'Wallet funded', newBalance: balanceAfter });
+    const numericAmount = Number(amount);
+    if (!numericAmount || numericAmount <= 0) {
+      return res.status(400).json({ error: 'Invalid amount' });
+    }
+
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const balanceBefore = user.walletBalance;
+    user.walletBalance += numericAmount;
+    await user.save();
+
+    await Transaction.create({
+      userId: user._id,
+      type: 'credit',
+      amount: numericAmount,
+      category: 'TRANSFER',
+      description: 'Wallet funding',
+      reference: `FUND-${Date.now()}`,
+      balanceBefore,
+      balanceAfter: user.walletBalance
+    });
+
+    res.json({ message: 'Wallet funded', newBalance: user.walletBalance });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Import SMS transactions
 router.post('/import-sms', auth, async (req, res) => {
   try {
     const { transactions } = req.body;
-    
-    const [users] = await db.query('SELECT walletBalance FROM users WHERE id = ?', [req.userId]);
-    let balance = parseFloat(users[0].walletBalance);
-    
-    for (const tx of transactions) {
-      const balanceBefore = balance;
-      balance -= parseFloat(tx.amount);
-      
-      const reference = 'SMS-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
-      await db.query(
-        'INSERT INTO transactions (userId, type, amount, category, description, merchant, reference, balanceBefore, balanceAfter, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [req.userId, 'debit', tx.amount, tx.category, tx.rawMessage, tx.merchant, reference, balanceBefore, balance, 'sms_import']
-      );
+    if (!Array.isArray(transactions) || transactions.length === 0) {
+      return res.status(400).json({ error: 'transactions array is required' });
     }
-    
-    await db.query('UPDATE users SET walletBalance = ? WHERE id = ?', [balance, req.userId]);
-    
-    res.json({ message: 'Transactions imported', newBalance: balance, count: transactions.length });
+
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const docs = [];
+    let runningBalance = user.walletBalance;
+
+    transactions.forEach((tx, index) => {
+      const debit = Number(tx.amount || 0);
+      const before = runningBalance;
+      runningBalance -= debit;
+
+      docs.push({
+        userId: user._id,
+        type: 'debit',
+        amount: debit,
+        category: tx.category || 'TRANSFER',
+        description: tx.rawMessage || 'Imported SMS transaction',
+        merchant: tx.merchant,
+        reference: `SMS-${Date.now()}-${index}`,
+        balanceBefore: before,
+        balanceAfter: runningBalance
+      });
+    });
+
+    await Transaction.insertMany(docs);
+    user.walletBalance = runningBalance;
+    await user.save();
+
+    res.json({
+      message: 'Transactions imported',
+      newBalance: runningBalance,
+      count: docs.length
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// P2P Transfer
 router.post('/transfer', auth, async (req, res) => {
   try {
     const { recipientEmail, amount, description } = req.body;
-    
-    const [senders] = await db.query('SELECT * FROM users WHERE id = ?', [req.userId]);
-    const [recipients] = await db.query('SELECT * FROM users WHERE email = ?', [recipientEmail]);
-    
-    if (recipients.length === 0) {
-      return res.status(404).json({ error: 'Recipient not found' });
+    const numericAmount = Number(amount);
+    if (!numericAmount || numericAmount <= 0) {
+      return res.status(400).json({ error: 'Invalid amount' });
     }
-    
-    const sender = senders[0];
-    const recipient = recipients[0];
-    
-    if (parseFloat(sender.walletBalance) < parseFloat(amount)) {
+
+    const sender = await User.findById(req.userId);
+    const recipient = await User.findOne({ email: recipientEmail });
+
+    if (!sender) return res.status(404).json({ error: 'Sender not found' });
+    if (!recipient) return res.status(404).json({ error: 'Recipient not found' });
+    if (sender.walletBalance < numericAmount) {
       return res.status(400).json({ error: 'Insufficient balance' });
     }
-    
-    const senderBalanceBefore = parseFloat(sender.walletBalance);
-    const senderBalanceAfter = senderBalanceBefore - parseFloat(amount);
-    const recipientBalanceBefore = parseFloat(recipient.walletBalance);
-    const recipientBalanceAfter = recipientBalanceBefore + parseFloat(amount);
-    
-    await db.query('UPDATE users SET walletBalance = ? WHERE id = ?', [senderBalanceAfter, sender.id]);
-    await db.query('UPDATE users SET walletBalance = ? WHERE id = ?', [recipientBalanceAfter, recipient.id]);
-    
-    const reference = 'TRF-' + Date.now();
-    
-    await db.query(
-      'INSERT INTO transactions (userId, type, amount, category, description, recipientId, reference, balanceBefore, balanceAfter, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [sender.id, 'debit', amount, 'TRANSFER', description || 'P2P Transfer', recipient.id, reference, senderBalanceBefore, senderBalanceAfter, 'wallet']
-    );
-    
-    await db.query(
-      'INSERT INTO transactions (userId, type, amount, category, description, senderId, reference, balanceBefore, balanceAfter, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [recipient.id, 'credit', amount, 'TRANSFER', description || 'P2P Transfer', sender.id, reference, recipientBalanceBefore, recipientBalanceAfter, 'wallet']
-    );
-    
-    res.json({ message: 'Transfer successful', reference, newBalance: senderBalanceAfter });
+
+    const senderBalanceBefore = sender.walletBalance;
+    const recipientBalanceBefore = recipient.walletBalance;
+
+    sender.walletBalance -= numericAmount;
+    recipient.walletBalance += numericAmount;
+
+    await sender.save();
+    await recipient.save();
+
+    const reference = `TRF-${Date.now()}`;
+    await Transaction.create([
+      {
+        userId: sender._id,
+        type: 'debit',
+        amount: numericAmount,
+        category: 'TRANSFER',
+        description: description || `Transfer to ${recipient.firstName}`,
+        recipientId: recipient._id,
+        reference,
+        balanceBefore: senderBalanceBefore,
+        balanceAfter: sender.walletBalance
+      },
+      {
+        userId: recipient._id,
+        type: 'credit',
+        amount: numericAmount,
+        category: 'TRANSFER',
+        description: description || `Transfer from ${sender.firstName}`,
+        senderId: sender._id,
+        reference: `${reference}-IN`,
+        balanceBefore: recipientBalanceBefore,
+        balanceAfter: recipient.walletBalance
+      }
+    ]);
+
+    res.json({ message: 'Transfer successful', reference, newBalance: sender.walletBalance });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

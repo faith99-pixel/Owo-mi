@@ -1,106 +1,145 @@
 const express = require('express');
 const router = express.Router();
-const db = require('../config/database');
+const User = require('../models/User');
+const SavingsGoal = require('../models/SavingsGoal');
+const Transaction = require('../models/Transaction');
 const auth = require('../middleware/auth');
 
-// Create savings goal
 router.post('/goals', auth, async (req, res) => {
   try {
     const { title, targetAmount, emoji, isLocked, unlockDate } = req.body;
-    
-    const [result] = await db.query(
-      'INSERT INTO savings_goals (userId, title, targetAmount, emoji, isLocked, unlockDate) VALUES (?, ?, ?, ?, ?, ?)',
-      [req.userId, title, targetAmount, emoji || '🎯', isLocked ? 1 : 0, unlockDate]
-    );
-    
-    res.status(201).json({ id: result.insertId, message: 'Goal created' });
+    const numericTarget = Number(targetAmount);
+
+    if (!title || !numericTarget || numericTarget <= 0) {
+      return res.status(400).json({ error: 'title and targetAmount are required' });
+    }
+
+    const goal = await SavingsGoal.create({
+      userId: req.userId,
+      title,
+      targetAmount: numericTarget,
+      emoji: emoji || 'TARGET',
+      isLocked: Boolean(isLocked),
+      unlockDate: unlockDate || null
+    });
+
+    res.status(201).json({ id: goal._id, message: 'Goal created' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Get all savings goals
 router.get('/goals', auth, async (req, res) => {
   try {
-    const [goals] = await db.query('SELECT * FROM savings_goals WHERE userId = ? ORDER BY createdAt DESC', [req.userId]);
+    const goals = await SavingsGoal.find({ userId: req.userId }).sort({ createdAt: -1 });
     res.json(goals);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Add money to savings goal
 router.post('/goals/:id/add', auth, async (req, res) => {
   try {
     const { amount } = req.body;
-    const goalId = req.params.id;
-    
-    const [users] = await db.query('SELECT walletBalance FROM users WHERE id = ?', [req.userId]);
-    const walletBalance = parseFloat(users[0].walletBalance);
-    
-    if (walletBalance < parseFloat(amount)) {
+    const numericAmount = Number(amount);
+    if (!numericAmount || numericAmount <= 0) {
+      return res.status(400).json({ error: 'Invalid amount' });
+    }
+
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    if (user.walletBalance < numericAmount) {
       return res.status(400).json({ error: 'Insufficient wallet balance' });
     }
-    
-    const [goals] = await db.query('SELECT * FROM savings_goals WHERE id = ? AND userId = ?', [goalId, req.userId]);
-    if (goals.length === 0) {
-      return res.status(404).json({ error: 'Goal not found' });
+
+    const goal = await SavingsGoal.findOne({ _id: req.params.id, userId: req.userId });
+    if (!goal) return res.status(404).json({ error: 'Goal not found' });
+
+    const walletBefore = user.walletBalance;
+    const goalBefore = goal.currentAmount;
+
+    user.walletBalance -= numericAmount;
+    user.savingsBalance += numericAmount;
+    goal.currentAmount += numericAmount;
+
+    await user.save();
+    await goal.save();
+
+    await Transaction.create({
+      userId: user._id,
+      type: 'debit',
+      amount: numericAmount,
+      category: 'SAVINGS',
+      description: `Added to ${goal.title}`,
+      reference: `SAV-${Date.now()}`,
+      balanceBefore: walletBefore,
+      balanceAfter: user.walletBalance
+    });
+
+    if (goal.currentAmount >= goal.targetAmount && goal.status !== 'completed') {
+      goal.status = 'completed';
+      goal.completedAt = new Date();
+      await goal.save();
     }
-    
-    const goal = goals[0];
-    const newCurrentAmount = parseFloat(goal.currentAmount) + parseFloat(amount);
-    const newWalletBalance = walletBalance - parseFloat(amount);
-    const newSavingsBalance = parseFloat(users[0].savingsBalance || 0) + parseFloat(amount);
-    
-    await db.query('UPDATE savings_goals SET currentAmount = ? WHERE id = ?', [newCurrentAmount, goalId]);
-    await db.query('UPDATE users SET walletBalance = ?, savingsBalance = ? WHERE id = ?', [newWalletBalance, newSavingsBalance, req.userId]);
-    
-    const reference = 'SAV-' + Date.now();
-    await db.query(
-      'INSERT INTO transactions (userId, type, amount, category, description, reference, balanceBefore, balanceAfter, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [req.userId, 'debit', amount, 'SAVINGS', `Added to ${goal.title}`, reference, walletBalance, newWalletBalance, 'savings']
-    );
-    
-    res.json({ message: 'Money added to savings', newCurrentAmount, newWalletBalance });
+
+    res.json({
+      message: 'Money added to savings',
+      goalBalanceBefore: goalBefore,
+      newCurrentAmount: goal.currentAmount,
+      newWalletBalance: user.walletBalance
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Withdraw from savings goal
 router.post('/goals/:id/withdraw', auth, async (req, res) => {
   try {
     const { amount } = req.body;
-    const goalId = req.params.id;
-    
-    const [goals] = await db.query('SELECT * FROM savings_goals WHERE id = ? AND userId = ?', [goalId, req.userId]);
-    if (goals.length === 0) {
-      return res.status(404).json({ error: 'Goal not found' });
+    const numericAmount = Number(amount);
+    if (!numericAmount || numericAmount <= 0) {
+      return res.status(400).json({ error: 'Invalid amount' });
     }
-    
-    const goal = goals[0];
-    if (parseFloat(goal.currentAmount) < parseFloat(amount)) {
+
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const goal = await SavingsGoal.findOne({ _id: req.params.id, userId: req.userId });
+    if (!goal) return res.status(404).json({ error: 'Goal not found' });
+
+    if (goal.isLocked && goal.unlockDate && new Date(goal.unlockDate) > new Date()) {
+      return res.status(400).json({ error: 'Goal is still locked' });
+    }
+
+    if (goal.currentAmount < numericAmount) {
       return res.status(400).json({ error: 'Insufficient savings balance' });
     }
-    
-    const [users] = await db.query('SELECT walletBalance, savingsBalance FROM users WHERE id = ?', [req.userId]);
-    const walletBalance = parseFloat(users[0].walletBalance);
-    const savingsBalance = parseFloat(users[0].savingsBalance);
-    
-    const newCurrentAmount = parseFloat(goal.currentAmount) - parseFloat(amount);
-    const newWalletBalance = walletBalance + parseFloat(amount);
-    const newSavingsBalance = savingsBalance - parseFloat(amount);
-    
-    await db.query('UPDATE savings_goals SET currentAmount = ? WHERE id = ?', [newCurrentAmount, goalId]);
-    await db.query('UPDATE users SET walletBalance = ?, savingsBalance = ? WHERE id = ?', [newWalletBalance, newSavingsBalance, req.userId]);
-    
-    const reference = 'WDR-' + Date.now();
-    await db.query(
-      'INSERT INTO transactions (userId, type, amount, category, description, reference, balanceBefore, balanceAfter, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [req.userId, 'credit', amount, 'WITHDRAWAL', `Withdrawn from ${goal.title}`, reference, walletBalance, newWalletBalance, 'savings']
-    );
-    
-    res.json({ message: 'Money withdrawn from savings', newCurrentAmount, newWalletBalance });
+
+    const walletBefore = user.walletBalance;
+    goal.currentAmount -= numericAmount;
+    user.walletBalance += numericAmount;
+    user.savingsBalance = Math.max(0, user.savingsBalance - numericAmount);
+
+    await goal.save();
+    await user.save();
+
+    await Transaction.create({
+      userId: user._id,
+      type: 'credit',
+      amount: numericAmount,
+      category: 'WITHDRAWAL',
+      description: `Withdrawn from ${goal.title}`,
+      reference: `WDR-${Date.now()}`,
+      balanceBefore: walletBefore,
+      balanceAfter: user.walletBalance
+    });
+
+    res.json({
+      message: 'Money withdrawn from savings',
+      newCurrentAmount: goal.currentAmount,
+      newWalletBalance: user.walletBalance
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
