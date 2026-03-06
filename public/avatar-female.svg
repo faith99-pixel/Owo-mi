@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Female avatar">
+  <rect width="128" height="128" rx="64" fill="#FFF0F7" />
+  <circle cx="64" cy="48" r="22" fill="#FFD9C0" />
+  <path d="M32 106c4-20 18-32 32-32s28 12 32 32v10H32z" fill="#E24A8D" />
+  <path d="M40 50c0-16 10-28 24-28s24 12 24 28c0 11-6 19-14 23 2-5 3-9 3-14 0-10-5-18-13-18s-13 8-13 18c0 5 1 9 3 14-8-4-14-12-14-23z" fill="#3A2230" />
+</svg>

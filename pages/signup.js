@@ -8,7 +8,9 @@ export default function Signup() {
     phone: '',
     password: '',
     firstName: '',
-    lastName: ''
+    lastName: '',
+    gender: 'male',
+    profileImageUrl: ''
   })
   const [loading, setLoading] = useState(false)
   const router = useRouter()
@@ -93,6 +95,29 @@ export default function Signup() {
               required
             />
           </div>
+
+          <div className="form-row">
+            <div className="form-group">
+              <label>Gender</label>
+              <select
+                value={formData.gender}
+                onChange={(e) => setFormData({...formData, gender: e.target.value})}
+                required
+              >
+                <option value="male">Male</option>
+                <option value="female">Female</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Profile Image URL (Optional)</label>
+              <input
+                type="url"
+                placeholder="https://..."
+                value={formData.profileImageUrl}
+                onChange={(e) => setFormData({...formData, profileImageUrl: e.target.value})}
+              />
+            </div>
+          </div>
           
           <div className="form-group">
             <label>Password</label>
@@ -170,14 +195,15 @@ export default function Signup() {
           font-weight: 600;
           color: #333;
         }
-        .form-group input {
+        .form-group input, .form-group select {
           padding: 14px 16px;
           border: 2px solid #e5e5e5;
           border-radius: 12px;
           font-size: 15px;
+          background: #fff;
           transition: border-color 0.2s;
         }
-        .form-group input:focus {
+        .form-group input:focus, .form-group select:focus {
           outline: none;
           border-color: #00A86B;
         }
