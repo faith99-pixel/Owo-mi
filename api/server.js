@@ -8,6 +8,7 @@ const walletRoutes = require('./routes/wallet');
 const savingsRoutes = require('./routes/savings');
 const transactionRoutes = require('./routes/transactions');
 const virtualAccountRoutes = require('./routes/virtualAccount');
+const paymentRoutes = require('./routes/payments');
 
 const app = express();
 
@@ -19,6 +20,7 @@ app.use('/api/wallet', walletRoutes);
 app.use('/api/savings', savingsRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/virtual-account', virtualAccountRoutes);
+app.use('/api/payments', paymentRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Owo Mi API is running', database: 'MongoDB' });

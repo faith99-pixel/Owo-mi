@@ -22,6 +22,14 @@ const transactionSchema = new mongoose.Schema({
   reference: { type: String, unique: true },
   
   status: { type: String, enum: ['pending', 'success', 'failed'], default: 'success' },
+  channel: { type: String, enum: ['wallet', 'bank_transfer', 'sms_import'], default: 'wallet' },
+  direction: { type: String, enum: ['inbound', 'outbound'], default: 'outbound' },
+  provider: String,
+  providerReference: String,
+  bankCode: String,
+  bankName: String,
+  accountNumber: String,
+  accountName: String,
   
   balanceBefore: Number,
   balanceAfter: Number,

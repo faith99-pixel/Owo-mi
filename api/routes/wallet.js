@@ -47,6 +47,8 @@ router.post('/fund', auth, async (req, res) => {
       description: sourceLabel ? `Wallet funding from ${sourceLabel}` : 'Wallet funding',
       merchant: source?.bankName || undefined,
       reference: `FUND-${Date.now()}`,
+      channel: 'wallet',
+      direction: 'inbound',
       balanceBefore,
       balanceAfter: user.walletBalance
     });
@@ -83,6 +85,8 @@ router.post('/import-sms', auth, async (req, res) => {
         description: tx.rawMessage || 'Imported SMS transaction',
         merchant: tx.merchant,
         reference: `SMS-${Date.now()}-${index}`,
+        channel: 'sms_import',
+        direction: 'outbound',
         balanceBefore: before,
         balanceAfter: runningBalance
       });
@@ -138,6 +142,8 @@ router.post('/transfer', auth, async (req, res) => {
         description: description || `Transfer to ${recipient.firstName}`,
         recipientId: recipient._id,
         reference,
+        channel: 'wallet',
+        direction: 'outbound',
         balanceBefore: senderBalanceBefore,
         balanceAfter: sender.walletBalance
       },
@@ -149,6 +155,8 @@ router.post('/transfer', auth, async (req, res) => {
         description: description || `Transfer from ${sender.firstName}`,
         senderId: sender._id,
         reference: `${reference}-IN`,
+        channel: 'wallet',
+        direction: 'inbound',
         balanceBefore: recipientBalanceBefore,
         balanceAfter: recipient.walletBalance
       }

@@ -48,6 +48,7 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('home')
   const [userInitial, setUserInitial] = useState('O')
   const [userAvatar, setUserAvatar] = useState('/avatar-neutral.svg')
+  const [virtualAccountInfo, setVirtualAccountInfo] = useState({ accountNumber: '', accountBank: '' })
   const [balance, setBalance] = useState({ walletBalance: 0, savingsBalance: 0, totalBalance: 0 })
   const [transactions, setTransactions] = useState([])
   const [goals, setGoals] = useState([])
@@ -56,6 +57,7 @@ export default function Dashboard() {
   const [showFundModal, setShowFundModal] = useState(false)
   const [showCardModal, setShowCardModal] = useState(false)
   const [showSMSModal, setShowSMSModal] = useState(false)
+  const [showBankTransferModal, setShowBankTransferModal] = useState(false)
   const [showGoalModal, setShowGoalModal] = useState(false)
   const [fundAmount, setFundAmount] = useState('')
   const [selectedFundingCard, setSelectedFundingCard] = useState(null)
@@ -66,6 +68,16 @@ export default function Dashboard() {
   const [goalForm, setGoalForm] = useState({ title: '', targetAmount: '' })
   const [selectedGoal, setSelectedGoal] = useState(null)
   const [savingsAmount, setSavingsAmount] = useState('')
+  const [availableBanks, setAvailableBanks] = useState([])
+  const [bankTransferForm, setBankTransferForm] = useState({
+    bankCode: '',
+    bankName: '',
+    accountNumber: '',
+    accountName: '',
+    amount: '',
+    narration: ''
+  })
+  const [bankTransferStatus, setBankTransferStatus] = useState('')
   const [loading, setLoading] = useState(false)
   const [showAmounts, setShowAmounts] = useState(true)
   const [openInsightSection, setOpenInsightSection] = useState('alerts')
@@ -102,6 +114,10 @@ export default function Dashboard() {
     setUserInitial(user.firstName?.charAt(0) || 'O')
     const fallbackAvatar = getDefaultAvatarForGender(user.gender)
     setUserAvatar(user.profileImageUrl || fallbackAvatar)
+    setVirtualAccountInfo({
+      accountNumber: user.virtualAccountNumber || '',
+      accountBank: user.virtualAccountBank || ''
+    })
     const privacy = localStorage.getItem('owomi_show_amounts')
     if (privacy !== null) {
       setShowAmounts(privacy === 'true')
@@ -320,6 +336,85 @@ export default function Dashboard() {
   const handleOpenFundFromCard = (card) => {
     setSelectedFundingCard(card)
     setShowFundModal(true)
+  }
+
+  const handleOpenBankTransferModal = async () => {
+    setShowBankTransferModal(true)
+    setBankTransferStatus('')
+    setBankTransferForm({
+      bankCode: '',
+      bankName: '',
+      accountNumber: '',
+      accountName: '',
+      amount: '',
+      narration: ''
+    })
+    try {
+      const result = await api.listBanks()
+      setAvailableBanks(Array.isArray(result?.banks) ? result.banks : [])
+    } catch (error) {
+      setAvailableBanks([])
+    }
+  }
+
+  const handleResolveBankAccount = async () => {
+    const accountNumber = String(bankTransferForm.accountNumber || '').replace(/\D/g, '')
+    if (!bankTransferForm.bankCode || accountNumber.length !== 10) return
+
+    setBankTransferStatus('Resolving account...')
+    try {
+      const result = await api.resolveBankAccount(bankTransferForm.bankCode, accountNumber)
+      if (result?.error) {
+        setBankTransferStatus(result.error)
+        return
+      }
+      setBankTransferForm((prev) => ({
+        ...prev,
+        accountNumber,
+        accountName: result.accountName || '',
+        bankName: availableBanks.find((b) => b.code === prev.bankCode)?.name || prev.bankName
+      }))
+      setBankTransferStatus(`Account verified: ${result.accountName}`)
+    } catch (error) {
+      setBankTransferStatus('Account verification failed')
+    }
+  }
+
+  const handleBankTransfer = async (e) => {
+    e.preventDefault()
+    const accountNumber = String(bankTransferForm.accountNumber || '').replace(/\D/g, '')
+    const amount = Number(bankTransferForm.amount)
+    if (!bankTransferForm.bankCode || !bankTransferForm.accountName || accountNumber.length !== 10 || !amount || amount <= 0) {
+      toast.error('Complete bank transfer details first')
+      return
+    }
+
+    setLoading(true)
+    setBankTransferStatus('Submitting transfer...')
+    try {
+      const result = await api.transferToBank({
+        bankCode: bankTransferForm.bankCode,
+        bankName: bankTransferForm.bankName,
+        accountNumber,
+        accountName: bankTransferForm.accountName,
+        amount,
+        narration: bankTransferForm.narration
+      })
+
+      if (result?.error) {
+        throw new Error(result.error)
+      }
+
+      toast.success('Bank transfer initiated')
+      setBankTransferStatus(`Transfer pending (${result.reference}). This usually settles in seconds.`)
+      setShowBankTransferModal(false)
+      loadData()
+    } catch (error) {
+      toast.error(error.message || 'Transfer failed')
+      setBankTransferStatus(error.message || 'Transfer failed')
+    } finally {
+      setLoading(false)
+    }
   }
 
   const handleOpenCardModal = () => {
@@ -723,26 +818,38 @@ export default function Dashboard() {
 
                 <div className="action-grid">
                   <button className="action-btn" onClick={() => setActiveTab('cards')}>
-                    <span>💳</span>
+                    <span aria-hidden="true">&#128179;</span>
                     <small>Bank Cards</small>
                   </button>
                   <button className="action-btn" onClick={() => setShowFundModal(true)}>
-                    <span>💳</span>
+                    <span aria-hidden="true">&#128181;</span>
                     <small>Fund Wallet</small>
                   </button>
+                  <button className="action-btn" onClick={handleOpenBankTransferModal}>
+                    <span aria-hidden="true">&#128184;</span>
+                    <small>Transfer Bank</small>
+                  </button>
                   <button className="action-btn" onClick={() => setShowSMSModal(true)}>
-                    <span>📱</span>
+                    <span aria-hidden="true">&#128241;</span>
                     <small>Import SMS</small>
                   </button>
                   <button className="action-btn" onClick={() => setActiveTab('savings')}>
-                    <span>💰</span>
+                    <span aria-hidden="true">&#128176;</span>
                     <small>Save Money</small>
                   </button>
                   <button className="action-btn" onClick={() => setActiveTab('insights')}>
-                    <span>📊</span>
+                    <span aria-hidden="true">&#128202;</span>
                     <small>Insights</small>
                   </button>
                 </div>
+
+                {virtualAccountInfo.accountNumber && (
+                  <div className="virtual-account-card">
+                    <p>Fund via bank transfer</p>
+                    <strong>{virtualAccountInfo.accountNumber}</strong>
+                    <span>{virtualAccountInfo.accountBank || 'Owomi Settlement Bank'}</span>
+                  </div>
+                )}
 
                 <div className="section-header">
                   <h3>Recent Transactions</h3>
@@ -1123,6 +1230,63 @@ export default function Dashboard() {
         </div>
       )}
 
+      {showBankTransferModal && (
+        <div className="modal-overlay" onClick={() => setShowBankTransferModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <h3>Transfer To Bank</h3>
+            <form onSubmit={handleBankTransfer}>
+              <select
+                value={bankTransferForm.bankCode}
+                onChange={(e) => {
+                  const selected = availableBanks.find((b) => b.code === e.target.value)
+                  setBankTransferForm((prev) => ({
+                    ...prev,
+                    bankCode: e.target.value,
+                    bankName: selected?.name || '',
+                    accountName: ''
+                  }))
+                }}
+                required
+              >
+                <option value="">Select bank</option>
+                {availableBanks.map((bank) => (
+                  <option key={bank.code} value={bank.code}>{bank.name}</option>
+                ))}
+              </select>
+              <div className="verify-row">
+                <input
+                  placeholder="Account Number"
+                  value={bankTransferForm.accountNumber}
+                  onChange={(e) => setBankTransferForm((prev) => ({ ...prev, accountNumber: e.target.value, accountName: '' }))}
+                  required
+                />
+                <button type="button" className="btn-inline" onClick={handleResolveBankAccount}>Verify</button>
+              </div>
+              <input
+                placeholder="Account Name"
+                value={bankTransferForm.accountName}
+                readOnly
+                required
+              />
+              <input
+                type="number"
+                placeholder="Amount"
+                value={bankTransferForm.amount}
+                onChange={(e) => setBankTransferForm((prev) => ({ ...prev, amount: e.target.value }))}
+                required
+              />
+              <input
+                placeholder="Narration (optional)"
+                value={bankTransferForm.narration}
+                onChange={(e) => setBankTransferForm((prev) => ({ ...prev, narration: e.target.value }))}
+              />
+              {bankTransferStatus ? <p className="modal-helper">{bankTransferStatus}</p> : null}
+              <button type="submit" disabled={loading}>{loading ? 'Processing...' : 'Send Transfer'}</button>
+            </form>
+          </div>
+        </div>
+      )}
+
       {showCardModal && (
         <div className="modal-overlay" onClick={() => { setShowCardModal(false); setBankSearchQuery(''); setShowBankDropdown(false) }}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
@@ -1249,6 +1413,10 @@ export default function Dashboard() {
         .action-btn { background: #f9f9f9; border: 2px solid #e5e5e5; border-radius: 16px; padding: 12px 8px; min-height: 92px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; cursor: pointer; }
         .action-btn span { font-size: 24px; }
         .action-btn small { font-size: 11px; font-weight: 600; color: #333; }
+        .virtual-account-card { background: #f4fbf8; border: 2px dashed #8ed6bb; border-radius: 14px; padding: 12px; margin: -8px 0 18px; }
+        .virtual-account-card p { margin: 0 0 4px; font-size: 12px; color: #0b7f54; font-weight: 700; text-transform: uppercase; }
+        .virtual-account-card strong { display: block; font-size: 22px; letter-spacing: 1px; color: #114d38; }
+        .virtual-account-card span { font-size: 12px; color: #3f6d5b; }
         .section-header { display: flex; justify-content: space-between; align-items: center; margin: 24px 0 16px; }
         .section-header h3 { font-size: 20px; font-weight: 700; color: #1a1a1a; margin: 0; }
         .link-btn { background: none; border: none; color: #00A86B; font-weight: 600; font-size: 14px; cursor: pointer; }
@@ -1352,7 +1520,9 @@ export default function Dashboard() {
         .modal-content { background: #fff; border-radius: 20px; padding: 24px; max-width: 400px; width: 100%; }
         .modal-content h3 { font-size: 20px; font-weight: 700; margin: 0 0 16px; }
         .modal-helper { font-size: 13px; color: #555; margin: -6px 0 12px; }
-        .modal-content input, .modal-content textarea { width: 100%; padding: 12px; border: 2px solid #e5e5e5; border-radius: 10px; font-size: 14px; margin-bottom: 12px; }
+        .modal-content input, .modal-content textarea, .modal-content select { width: 100%; padding: 12px; border: 2px solid #e5e5e5; border-radius: 10px; font-size: 14px; margin-bottom: 12px; background: #fff; }
+        .verify-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: start; }
+        .btn-inline { width: auto !important; min-width: 86px; padding: 12px 10px !important; border-radius: 10px !important; font-size: 12px !important; }
         .bank-picker { margin-bottom: 10px; position: relative; }
         .bank-results { border: 1px solid #e5e5e5; border-radius: 10px; max-height: 170px; overflow: auto; margin: 0 0 12px; padding: 6px; background: #f8faf9; }
         .bank-option { width: 100%; text-align: left; padding: 10px 12px; border: none; border-radius: 10px; background: #fff; color: #222; cursor: pointer; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
