@@ -385,6 +385,135 @@ export default function Dashboard() {
     return alerts
   }, [transactions])
 
+  const behaviorInsights = useMemo(() => {
+    const debitTx = transactions.filter((tx) => tx.type === 'debit')
+    const now = Date.now()
+    const dayMs = 24 * 60 * 60 * 1000
+    const weekMs = 7 * dayMs
+    const leakCategories = new Set(['BETTING', 'POS', 'TRANSFER', 'AIRTIME', 'DATA'])
+
+    const recentDebits = debitTx.filter((tx) => {
+      const createdAt = new Date(tx.createdAt).getTime()
+      return Number.isFinite(createdAt) && now - createdAt <= weekMs
+    })
+
+    const previousDebits = debitTx.filter((tx) => {
+      const createdAt = new Date(tx.createdAt).getTime()
+      return Number.isFinite(createdAt) && now - createdAt > weekMs && now - createdAt <= weekMs * 2
+    })
+
+    const weeklyTotal = recentDebits.reduce((sum, tx) => sum + toNumber(tx.amount), 0)
+    const previousWeeklyTotal = previousDebits.reduce((sum, tx) => sum + toNumber(tx.amount), 0)
+    const leakTx = recentDebits.filter((tx) => leakCategories.has((tx.category || '').toUpperCase()))
+    const leakSpendTotal = leakTx.reduce((sum, tx) => sum + toNumber(tx.amount), 0)
+    const leakRatio = weeklyTotal ? leakSpendTotal / weeklyTotal : 0
+
+    const bettingCount = leakTx.filter((tx) => (tx.category || '').toUpperCase() === 'BETTING').length
+    const posCount = leakTx.filter((tx) => (tx.category || '').toUpperCase() === 'POS').length
+    const transferCount = leakTx.filter((tx) => (tx.category || '').toUpperCase() === 'TRANSFER').length
+    const airtimeDataCount = leakTx.filter((tx) => {
+      const category = (tx.category || '').toUpperCase()
+      return category === 'AIRTIME' || category === 'DATA'
+    }).length
+
+    const byCategory = {}
+    const byMerchant = {}
+    recentDebits.forEach((tx) => {
+      const category = (tx.category || 'OTHER').toUpperCase()
+      const amount = toNumber(tx.amount)
+      const merchant = (tx.merchant || tx.description || '').trim() || 'Unknown Merchant'
+      byCategory[category] = (byCategory[category] || 0) + amount
+      byMerchant[merchant] = (byMerchant[merchant] || 0) + amount
+    })
+
+    const leakiestCategoryEntry = Object.entries(byCategory).sort((a, b) => b[1] - a[1])[0]
+    const leakiestMerchantEntry = Object.entries(byMerchant).sort((a, b) => b[1] - a[1])[0]
+
+    let score = 100
+    score -= Math.min(45, leakRatio * 60)
+    score -= Math.min(18, bettingCount * 4)
+    score -= Math.min(12, Math.max(0, posCount - 2) * 2)
+    score -= Math.min(10, Math.max(0, airtimeDataCount - 3) * 2)
+    score -= Math.min(10, Math.max(0, transferCount - 5))
+    score = Math.max(0, Math.min(100, Math.round(score)))
+
+    const dayBuckets = {}
+    recentDebits.forEach((tx) => {
+      const key = new Date(tx.createdAt).toISOString().slice(0, 10)
+      const amount = toNumber(tx.amount)
+      const isLeak = leakCategories.has((tx.category || '').toUpperCase())
+      if (!dayBuckets[key]) dayBuckets[key] = { totalLeak: 0 }
+      if (isLeak) dayBuckets[key].totalLeak += amount
+    })
+
+    let streakDays = 0
+    for (let i = 0; i < 14; i += 1) {
+      const date = new Date(now - i * dayMs).toISOString().slice(0, 10)
+      const totalLeak = dayBuckets[date]?.totalLeak || 0
+      if (totalLeak <= 1000) {
+        streakDays += 1
+      } else {
+        break
+      }
+    }
+
+    const actionableFixes = []
+    if (bettingCount >= 2) actionableFixes.push('Set a weekly betting cap and block extra betting transfers after the cap.')
+    if (posCount >= 4) actionableFixes.push('Reduce POS withdrawals by batching cash-outs into one larger transaction.')
+    if (airtimeDataCount >= 4) actionableFixes.push('Bundle airtime/data purchases into a weekly plan to avoid repeated small spends.')
+    if (transferCount >= 8) actionableFixes.push('Group frequent transfers and schedule one daily transfer window.')
+    if (leakiestCategoryEntry && weeklyTotal && (leakiestCategoryEntry[1] / weeklyTotal) >= 0.35) {
+      actionableFixes.push(`Cap ${leakiestCategoryEntry[0]} at 25% of weekly spend and review every Sunday.`)
+    }
+    if (!actionableFixes.length) {
+      actionableFixes.push('Your leak pattern is stable. Keep the streak and review top merchants before each weekend.')
+    }
+
+    const trendDirection = previousWeeklyTotal > 0
+      ? ((weeklyTotal - previousWeeklyTotal) / previousWeeklyTotal) * 100
+      : 0
+    const trendText = previousWeeklyTotal > 0
+      ? `${trendDirection > 0 ? 'Up' : 'Down'} ${Math.abs(trendDirection).toFixed(1)}% vs last week`
+      : 'No previous-week baseline yet'
+
+    const shameText = [
+      'Owomi Truth Report',
+      `Leak Score: ${score}/100`,
+      `Weekly Spend: N${formatCurrency(weeklyTotal)}`,
+      `Leak Spend: N${formatCurrency(leakSpendTotal)} (${(leakRatio * 100).toFixed(1)}%)`,
+      `Top Leak: ${(leakiestCategoryEntry && leakiestCategoryEntry[0]) || 'N/A'}`,
+      `Top Merchant: ${(leakiestMerchantEntry && leakiestMerchantEntry[0]) || 'N/A'}`,
+      `Streak: ${streakDays} low-leak day(s)`,
+      '#OwomiTruthReport'
+    ].join('\n')
+
+    return {
+      score,
+      streakDays,
+      weeklyTotal,
+      leakSpendTotal,
+      leakRatio,
+      trendText,
+      leakiestCategory: leakiestCategoryEntry ? leakiestCategoryEntry[0] : 'N/A',
+      leakiestMerchant: leakiestMerchantEntry ? leakiestMerchantEntry[0] : 'N/A',
+      actionableFixes,
+      shameText
+    }
+  }, [transactions])
+
+  const handleShareTruthReport = async () => {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(behaviorInsights.shameText)
+        toast.success('Truth report copied. Share it anywhere.')
+        return
+      }
+      toast.error('Clipboard is not available on this browser.')
+    } catch (error) {
+      toast.error('Failed to copy truth report')
+    }
+  }
+
   return (
     <div className="app-container">
       <div className="app-wrapper">
@@ -523,7 +652,7 @@ export default function Dashboard() {
             {activeTab === 'insights' && (
               <>
                 <div className="insights-hero">
-                  <h2>Spending Insights</h2>
+                  <h2>Leak-First Insights</h2>
                   <p className={`total-spent ${!showAmounts ? 'masked' : ''}`}>Total Spent: ₦{formatCurrency(insightDetails.total)}</p>
                 </div>
 
@@ -542,6 +671,43 @@ export default function Dashboard() {
                   </div>
                 </div>
 
+                <div className="truth-grid">
+                  <div className="truth-card highlight">
+                    <p>Money Leak Score</p>
+                    <h3>{behaviorInsights.score}<small>/100</small></h3>
+                    <span>{behaviorInsights.score >= 75 ? 'Strong control' : behaviorInsights.score >= 50 ? 'Needs tightening' : 'High leakage risk'}</span>
+                  </div>
+                  <div className="truth-card">
+                    <p>Low-Leak Streak</p>
+                    <h3>{behaviorInsights.streakDays}<small> day(s)</small></h3>
+                    <span>Consecutive days with minimal leak spend</span>
+                  </div>
+                </div>
+
+                <div className="section-header">
+                  <h3>Weekly Truth Report</h3>
+                  <button onClick={handleShareTruthReport} className="link-btn">Copy Shame Card</button>
+                </div>
+                <div className="truth-report">
+                  <div className="truth-row">
+                    <span>This week total</span>
+                    <strong className={!showAmounts ? 'masked' : ''}>N{formatCurrency(behaviorInsights.weeklyTotal)}</strong>
+                  </div>
+                  <div className="truth-row">
+                    <span>Leak spend</span>
+                    <strong className={!showAmounts ? 'masked' : ''}>N{formatCurrency(behaviorInsights.leakSpendTotal)} ({(behaviorInsights.leakRatio * 100).toFixed(1)}%)</strong>
+                  </div>
+                  <div className="truth-row">
+                    <span>Top leak category</span>
+                    <strong>{behaviorInsights.leakiestCategory}</strong>
+                  </div>
+                  <div className="truth-row">
+                    <span>Top leak merchant</span>
+                    <strong>{behaviorInsights.leakiestMerchant}</strong>
+                  </div>
+                  <p className="truth-trend">{behaviorInsights.trendText}</p>
+                </div>
+
                 <div className="section-header">
                   <h3>Leakage Watch</h3>
                 </div>
@@ -550,6 +716,18 @@ export default function Dashboard() {
                     <div className="leakage-item" key={index}>⚠️ {alert}</div>
                   ))}
                   {!leakAlerts.length && <p className="empty-state">No major leak patterns detected yet.</p>}
+                </div>
+
+                <div className="section-header">
+                  <h3>Actionable Fixes</h3>
+                </div>
+                <div className="fix-list">
+                  {behaviorInsights.actionableFixes.map((fix, index) => (
+                    <div className="fix-item" key={index}>
+                      <strong>Fix {index + 1}</strong>
+                      <p>{fix}</p>
+                    </div>
+                  ))}
                 </div>
 
                 <div className="category-list">
@@ -803,8 +981,25 @@ export default function Dashboard() {
         .summary-card { background: #fff; border: 2px solid #e5e5e5; border-radius: 14px; padding: 12px; }
         .summary-card p { font-size: 11px; color: #777; margin: 0 0 6px; }
         .summary-card strong { font-size: 14px; color: #1a1a1a; }
+        .truth-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+        .truth-card { background: #fff; border: 2px solid #e5e5e5; border-radius: 14px; padding: 14px; }
+        .truth-card.highlight { background: linear-gradient(135deg, #0d9a65 0%, #0a7f54 100%); border-color: transparent; color: #fff; }
+        .truth-card p { font-size: 11px; margin: 0 0 8px; opacity: 0.9; }
+        .truth-card h3 { margin: 0; font-size: 24px; line-height: 1; }
+        .truth-card h3 small { font-size: 12px; margin-left: 4px; opacity: 0.8; }
+        .truth-card span { font-size: 12px; display: block; margin-top: 8px; color: #555; }
+        .truth-card.highlight span { color: rgba(255, 255, 255, 0.9); }
+        .truth-report { background: #fff; border: 2px solid #e5e5e5; border-radius: 14px; padding: 12px; margin-bottom: 16px; }
+        .truth-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px dashed #ececec; font-size: 13px; color: #555; }
+        .truth-row:last-of-type { border-bottom: none; }
+        .truth-row strong { color: #1a1a1a; text-align: right; }
+        .truth-trend { margin: 10px 0 0; font-size: 12px; color: #0a7f54; font-weight: 700; }
         .leakage-list { display: grid; gap: 8px; margin-bottom: 14px; }
         .leakage-item { background: #fff4f4; color: #a63b3b; border: 1px solid #ffd6d6; border-radius: 12px; padding: 10px 12px; font-size: 13px; }
+        .fix-list { display: grid; gap: 10px; margin-bottom: 14px; }
+        .fix-item { background: #fff; border: 2px solid #e5e5e5; border-radius: 12px; padding: 12px; }
+        .fix-item strong { font-size: 12px; color: #0a7f54; display: block; margin-bottom: 4px; }
+        .fix-item p { margin: 0; font-size: 13px; color: #444; }
         .cards-list { display: grid; gap: 14px; }
         .bank-card { background: linear-gradient(135deg, #143e63 0%, #0f2d47 100%); color: #fff; border-radius: 16px; padding: 18px; box-shadow: 0 8px 20px rgba(15, 45, 71, 0.35); }
         .bank-name { font-size: 12px; opacity: 0.9; margin: 0 0 8px; }
@@ -839,6 +1034,9 @@ export default function Dashboard() {
         .modal-content textarea { min-height: 120px; resize: vertical; }
         .modal-content button { width: 100%; padding: 14px; background: #00A86B; color: #fff; border: none; border-radius: 10px; font-weight: 700; cursor: pointer; }
         .modal-content button:disabled { opacity: 0.6; }
+        @media (max-width: 480px) {
+          .truth-grid { grid-template-columns: 1fr; }
+        }
         @media (min-width: 768px) {
           .app-wrapper { padding: 24px; }
           .mobile-view { border-radius: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.15); }
