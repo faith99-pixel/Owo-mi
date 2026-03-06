@@ -364,22 +364,46 @@ export default function Dashboard() {
     const debitTx = transactions.filter((tx) => tx.type === 'debit')
     if (!debitTx.length) return []
 
-    const bets = debitTx.filter((tx) => (tx.category || '').toUpperCase() === 'BETTING')
-    const pos = debitTx.filter((tx) => (tx.category || '').toUpperCase() === 'POS')
-    const transfers = debitTx.filter((tx) => (tx.category || '').toUpperCase() === 'TRANSFER')
+    const now = Date.now()
+    const weekMs = 7 * 24 * 60 * 60 * 1000
+    const recentDebits = debitTx.filter((tx) => {
+      const createdAt = new Date(tx.createdAt).getTime()
+      return Number.isFinite(createdAt) && now - createdAt <= weekMs
+    })
+    if (!recentDebits.length) return []
+
+    const bets = recentDebits.filter((tx) => (tx.category || '').toUpperCase() === 'BETTING')
+    const pos = recentDebits.filter((tx) => (tx.category || '').toUpperCase() === 'POS')
+    const transfers = recentDebits.filter((tx) => (tx.category || '').toUpperCase() === 'TRANSFER')
 
     const alerts = []
     const betTotal = bets.reduce((sum, tx) => sum + toNumber(tx.amount), 0)
-    if (betTotal >= 5000) {
-      alerts.push(`Betting spend is high this period (₦${formatCurrency(betTotal)}).`)
+    if (betTotal >= 3000) {
+      alerts.push(`Betting spend is high this period (N${formatCurrency(betTotal)}).`)
     }
 
-    if (pos.length >= 5) {
+    if (pos.length >= 3) {
       alerts.push(`Frequent POS usage (${pos.length} times). Fees may be leaking value.`)
     }
 
-    if (transfers.length >= 8) {
+    const transferTotal = transfers.reduce((sum, tx) => sum + toNumber(tx.amount), 0)
+    if (transfers.length >= 5 || transferTotal >= 10000) {
       alerts.push(`You make many transfers (${transfers.length}). Track recurring destinations.`)
+    }
+
+    const weeklyTotal = recentDebits.reduce((sum, tx) => sum + toNumber(tx.amount), 0)
+    const byCategory = {}
+    recentDebits.forEach((tx) => {
+      const category = (tx.category || 'OTHER').toUpperCase()
+      byCategory[category] = (byCategory[category] || 0) + toNumber(tx.amount)
+    })
+    const topCategory = Object.entries(byCategory).sort((a, b) => b[1] - a[1])[0]
+    if (topCategory && weeklyTotal >= 5000) {
+      const [category, categoryTotal] = topCategory
+      const ratio = categoryTotal / weeklyTotal
+      if (ratio >= 0.45) {
+        alerts.push(`${category} is taking ${(ratio * 100).toFixed(1)}% of your weekly spend.`)
+      }
     }
 
     return alerts
@@ -730,6 +754,9 @@ export default function Dashboard() {
                   ))}
                 </div>
 
+                <div className="section-header">
+                  <h3>Category Breakdown</h3>
+                </div>
                 <div className="category-list">
                   {insightDetails.categories.map((cat) => (
                     <div className="category-card" key={cat.category}>
@@ -1055,3 +1082,4 @@ function getCategoryIcon(category) {
   }
   return icons[category] || '💳'
 }
+
