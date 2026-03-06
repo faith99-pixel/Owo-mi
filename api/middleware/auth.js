@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 
 module.exports = (req, res, next) => {
   try {
@@ -9,7 +10,13 @@ module.exports = (req, res, next) => {
     }
     
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'owomi-secret');
-    req.userId = decoded.userId;
+    const tokenUserId = decoded.userId || decoded.id;
+
+    if (!tokenUserId || !mongoose.Types.ObjectId.isValid(String(tokenUserId))) {
+      return res.status(401).json({ error: 'Invalid token payload. Please log in again.' });
+    }
+
+    req.userId = String(tokenUserId);
     next();
   } catch (error) {
     res.status(401).json({ error: 'Invalid token' });

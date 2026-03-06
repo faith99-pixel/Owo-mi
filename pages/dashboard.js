@@ -12,6 +12,37 @@ const TABS = [
   { id: 'history', label: 'History', icon: '📜' }
 ]
 
+const NIGERIAN_BANKS = [
+  'Access Bank',
+  'Citibank Nigeria',
+  'Ecobank Nigeria',
+  'Fidelity Bank',
+  'First Bank of Nigeria',
+  'First City Monument Bank (FCMB)',
+  'Globus Bank',
+  'Guaranty Trust Bank (GTBank)',
+  'Heritage Bank',
+  'Jaiz Bank',
+  'Keystone Bank',
+  'Kuda Bank',
+  'Moniepoint MFB',
+  'Opay',
+  'Parallex Bank',
+  'Polaris Bank',
+  'PremiumTrust Bank',
+  'Providus Bank',
+  'Stanbic IBTC Bank',
+  'Standard Chartered Nigeria',
+  'Sterling Bank',
+  'SunTrust Bank Nigeria',
+  'Titan Trust Bank',
+  'Union Bank of Nigeria',
+  'United Bank for Africa (UBA)',
+  'Unity Bank',
+  'Wema Bank',
+  'Zenith Bank'
+]
+
 export default function Dashboard() {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState('home')
@@ -29,6 +60,8 @@ export default function Dashboard() {
   const [selectedFundingCard, setSelectedFundingCard] = useState(null)
   const [smsText, setSmsText] = useState('')
   const [cardForm, setCardForm] = useState({ bankName: '', cardHolder: '', cardNumber: '', expiry: '' })
+  const [bankSearchQuery, setBankSearchQuery] = useState('')
+  const [showBankDropdown, setShowBankDropdown] = useState(false)
   const [goalForm, setGoalForm] = useState({ title: '', targetAmount: '' })
   const [selectedGoal, setSelectedGoal] = useState(null)
   const [savingsAmount, setSavingsAmount] = useState('')
@@ -227,6 +260,11 @@ export default function Dashboard() {
   const handleAddCard = (e) => {
     e.preventDefault()
     const number = String(cardForm.cardNumber || '').replace(/\s+/g, '')
+    const selectedBankName = cardForm.bankName.trim()
+    if (!selectedBankName) {
+      toast.error('Search and select your bank from the list')
+      return
+    }
     if (number.length < 12) {
       toast.error('Enter a valid card number')
       return
@@ -234,7 +272,7 @@ export default function Dashboard() {
 
     const newCard = {
       id: Date.now().toString(),
-      bankName: cardForm.bankName.trim() || 'Bank Card',
+      bankName: selectedBankName,
       cardHolder: cardForm.cardHolder.trim() || 'Card Holder',
       last4: number.slice(-4),
       expiry: cardForm.expiry || '--/--'
@@ -242,6 +280,7 @@ export default function Dashboard() {
 
     persistCards([newCard, ...cards])
     setCardForm({ bankName: '', cardHolder: '', cardNumber: '', expiry: '' })
+    setBankSearchQuery('')
     setShowCardModal(false)
     toast.success('Card added')
   }
@@ -258,6 +297,19 @@ export default function Dashboard() {
     setSelectedFundingCard(card)
     setShowFundModal(true)
   }
+
+  const handleOpenCardModal = () => {
+    setCardForm({ bankName: '', cardHolder: '', cardNumber: '', expiry: '' })
+    setBankSearchQuery('')
+    setShowBankDropdown(false)
+    setShowCardModal(true)
+  }
+
+  const filteredBanks = useMemo(() => {
+    const query = bankSearchQuery.trim().toLowerCase()
+    if (!query) return NIGERIAN_BANKS.slice(0, 8)
+    return NIGERIAN_BANKS.filter((bank) => bank.toLowerCase().includes(query)).slice(0, 8)
+  }, [bankSearchQuery])
 
   const insightDetails = useMemo(() => {
     const debits = transactions.filter((tx) => tx.type === 'debit')
@@ -414,7 +466,7 @@ export default function Dashboard() {
               <>
                 <div className="section-header">
                   <h3>Bank Cards</h3>
-                  <button onClick={() => setShowCardModal(true)} className="link-btn">+ Add Card</button>
+                  <button onClick={handleOpenCardModal} className="link-btn">+ Add Card</button>
                 </div>
 
                 <div className="cards-list">
@@ -593,31 +645,64 @@ export default function Dashboard() {
       )}
 
       {showCardModal && (
-        <div className="modal-overlay" onClick={() => setShowCardModal(false)}>
+        <div className="modal-overlay" onClick={() => { setShowCardModal(false); setBankSearchQuery(''); setShowBankDropdown(false) }}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <h3>Add Bank Card</h3>
             <form onSubmit={handleAddCard}>
-              <input
-                placeholder="Bank Name"
-                value={cardForm.bankName}
-                onChange={(e) => setCardForm({ ...cardForm, bankName: e.target.value })}
-                required
-              />
+              <div className="bank-picker">
+                <input
+                  placeholder="Search and select bank"
+                  value={bankSearchQuery}
+                  onFocus={() => setShowBankDropdown(true)}
+                  onClick={() => setShowBankDropdown(true)}
+                  onChange={(e) => {
+                    const nextValue = e.target.value
+                    setBankSearchQuery(nextValue)
+                    setShowBankDropdown(true)
+                    if (cardForm.bankName && cardForm.bankName !== nextValue) {
+                      setCardForm({ ...cardForm, bankName: '' })
+                    }
+                  }}
+                  required
+                />
+                {showBankDropdown && (
+                  <div className="bank-results">
+                    {filteredBanks.map((bank) => (
+                      <button
+                        key={bank}
+                        type="button"
+                        className={`bank-option ${cardForm.bankName === bank ? 'selected' : ''}`}
+                        onClick={() => {
+                          setCardForm({ ...cardForm, bankName: bank })
+                          setBankSearchQuery(bank)
+                          setShowBankDropdown(false)
+                        }}
+                      >
+                        {bank}
+                      </button>
+                    ))}
+                    {!filteredBanks.length && <p className="bank-empty">No bank matches your search</p>}
+                  </div>
+                )}
+              </div>
               <input
                 placeholder="Card Holder Name"
                 value={cardForm.cardHolder}
+                onFocus={() => setShowBankDropdown(false)}
                 onChange={(e) => setCardForm({ ...cardForm, cardHolder: e.target.value })}
                 required
               />
               <input
                 placeholder="Card Number"
                 value={cardForm.cardNumber}
+                onFocus={() => setShowBankDropdown(false)}
                 onChange={(e) => setCardForm({ ...cardForm, cardNumber: e.target.value })}
                 required
               />
               <input
                 placeholder="Expiry (MM/YY)"
                 value={cardForm.expiry}
+                onFocus={() => setShowBankDropdown(false)}
                 onChange={(e) => setCardForm({ ...cardForm, expiry: e.target.value })}
                 required
               />
@@ -745,6 +830,12 @@ export default function Dashboard() {
         .modal-content h3 { font-size: 20px; font-weight: 700; margin: 0 0 16px; }
         .modal-helper { font-size: 13px; color: #555; margin: -6px 0 12px; }
         .modal-content input, .modal-content textarea { width: 100%; padding: 12px; border: 2px solid #e5e5e5; border-radius: 10px; font-size: 14px; margin-bottom: 12px; }
+        .bank-picker { margin-bottom: 10px; position: relative; }
+        .bank-results { border: 1px solid #e5e5e5; border-radius: 10px; max-height: 170px; overflow: auto; margin: 0 0 12px; padding: 6px; background: #f8faf9; }
+        .bank-option { width: 100%; text-align: left; padding: 10px 12px; border: none; border-radius: 10px; background: #fff; color: #222; cursor: pointer; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+        .bank-option:last-child { margin-bottom: 0; }
+        .bank-option.selected { background: #eaf8f2; color: #0b7f54; }
+        .bank-empty { padding: 10px 12px; font-size: 12px; color: #777; margin: 0; }
         .modal-content textarea { min-height: 120px; resize: vertical; }
         .modal-content button { width: 100%; padding: 14px; background: #00A86B; color: #fff; border: none; border-radius: 10px; font-weight: 700; cursor: pointer; }
         .modal-content button:disabled { opacity: 0.6; }
