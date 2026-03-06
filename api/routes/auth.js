@@ -2,6 +2,12 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { getProvider } = require('../services/payments');
+
+const buildFallbackVirtualAccount = () => ({
+  accountNumber: '80' + Math.random().toString().slice(2, 10),
+  accountBank: 'Owomi Settlement Bank'
+});
 
 router.post('/register', async (req, res) => {
   try {
@@ -16,7 +22,7 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ error: 'User already exists' });
     }
 
-    const virtualAccountNumber = '80' + Math.random().toString().slice(2, 10);
+    const fallbackVirtualAccount = buildFallbackVirtualAccount();
 
     const user = new User({
       email,
@@ -26,8 +32,28 @@ router.post('/register', async (req, res) => {
       lastName,
       gender,
       profileImageUrl: profileImageUrl || '',
-      virtualAccountNumber
+      virtualAccountNumber: fallbackVirtualAccount.accountNumber,
+      virtualAccountBank: fallbackVirtualAccount.accountBank
     });
+
+    const provider = getProvider();
+    if (provider.createVirtualAccount) {
+      try {
+        const virtualAccount = await provider.createVirtualAccount({
+          userId: user._id.toString(),
+          email,
+          firstName,
+          lastName
+        });
+
+        if (virtualAccount?.success && virtualAccount.accountNumber) {
+          user.virtualAccountNumber = String(virtualAccount.accountNumber);
+          user.virtualAccountBank = virtualAccount.accountBank || 'Monnify Settlement Bank';
+        }
+      } catch (_) {
+        // Fallback virtual account stays active when provider call fails.
+      }
+    }
 
     await user.save();
 
@@ -92,7 +118,8 @@ router.post('/login', async (req, res) => {
         profileImageUrl: user.profileImageUrl,
         walletBalance: user.walletBalance,
         savingsBalance: user.savingsBalance,
-        virtualAccountNumber: user.virtualAccountNumber
+        virtualAccountNumber: user.virtualAccountNumber,
+        virtualAccountBank: user.virtualAccountBank
       }
     });
   } catch (error) {

@@ -1,7 +1,9 @@
 const { mockProvider } = require('./mockProvider')
+const { monnifyProvider } = require('./monnifyProvider')
 
 const providers = {
-  mock: mockProvider
+  mock: mockProvider,
+  monnify: monnifyProvider
 }
 
 const getProvider = () => {

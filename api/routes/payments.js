@@ -10,10 +10,108 @@ const toNumber = (value) => {
   return Number.isFinite(n) ? n : 0
 }
 
+const normalizePayload = (body) => {
+  if (!body) return {}
+  if (typeof body === 'string') {
+    try {
+      return JSON.parse(body)
+    } catch {
+      return {}
+    }
+  }
+  if (typeof body === 'object' && typeof body.payload === 'string') {
+    try {
+      return JSON.parse(body.payload)
+    } catch {
+      return body
+    }
+  }
+  if (typeof body === 'object' && body.data && typeof body.data === 'object') {
+    return body.data
+  }
+  if (typeof body === 'object' && body.eventData && typeof body.eventData === 'object') {
+    return body.eventData
+  }
+  return body
+}
+
+const resolveInboundFields = (payload) => {
+  const accountNumber =
+    payload?.accountNumber ||
+    payload?.destinationAccountInformation?.accountNumber ||
+    payload?.destinationAccountNumber
+
+  const amount =
+    payload?.amountPaid ||
+    payload?.amount ||
+    payload?.amountReceived
+
+  const payerName =
+    payload?.payerName ||
+    payload?.originatorName ||
+    payload?.customerName ||
+    payload?.paidOnBehalfOf
+
+  const reference =
+    payload?.paymentReference ||
+    payload?.reference ||
+    payload?.transactionReference ||
+    payload?.sessionId
+
+  return {
+    accountNumber: accountNumber ? String(accountNumber) : '',
+    amount: toNumber(amount),
+    payerName: payerName ? String(payerName) : '',
+    reference: reference ? String(reference) : ''
+  }
+}
+
+const settleTransferStatus = async ({ tx, status, providerKey }) => {
+  if (!tx || tx.status !== 'pending') return tx
+  if (status === 'pending') return tx
+
+  if (status === 'success') {
+    tx.status = 'success'
+    await tx.save()
+    return tx
+  }
+
+  tx.status = 'failed'
+  await tx.save()
+
+  const transferUser = await User.findById(tx.userId)
+  if (!transferUser) return tx
+
+  const refundBefore = transferUser.walletBalance
+  transferUser.walletBalance += toNumber(tx.amount)
+  await transferUser.save()
+
+  const reversalReference = `${tx.reference}-REV`
+  const existingReversal = await Transaction.findOne({ reference: reversalReference })
+  if (!existingReversal) {
+    await Transaction.create({
+      userId: transferUser._id,
+      type: 'credit',
+      amount: toNumber(tx.amount),
+      category: 'TRANSFER',
+      description: `Transfer reversal for ${tx.accountName || 'bank transfer'}`,
+      reference: reversalReference,
+      status: 'success',
+      channel: 'bank_transfer',
+      direction: 'inbound',
+      provider: providerKey,
+      balanceBefore: refundBefore,
+      balanceAfter: transferUser.walletBalance
+    })
+  }
+
+  return tx
+}
+
 router.get('/banks', auth, async (req, res) => {
   try {
     const provider = getProvider()
-    const banks = provider.listBanks()
+    const banks = await provider.listBanks()
     res.json({ provider: provider.key, banks })
   } catch (error) {
     res.status(500).json({ error: error.message })
@@ -98,49 +196,26 @@ router.post('/transfers', auth, async (req, res) => {
       balanceAfter: user.walletBalance
     })
 
-    // Mock rail auto-settlement for near-real-time demo behavior
-    setTimeout(async () => {
-      try {
-        const tx = await Transaction.findOne({ reference, direction: 'outbound' })
-        if (!tx || tx.status !== 'pending') return
+    if (provider.key === 'mock') {
+      // Mock rail auto-settlement for near-real-time demo behavior
+      setTimeout(async () => {
+        try {
+          const tx = await Transaction.findOne({ reference, direction: 'outbound' })
+          if (!tx || tx.status !== 'pending') return
 
-        const statusResult = await provider.checkTransferStatus({ reference, providerReference: tx.providerReference })
-        if (!statusResult.success) return
+          const statusResult = await provider.checkTransferStatus({ reference, providerReference: tx.providerReference })
+          if (!statusResult.success) return
 
-        if (statusResult.status === 'success') {
-          tx.status = 'success'
-          await tx.save()
-          return
+          await settleTransferStatus({
+            tx,
+            status: statusResult.status,
+            providerKey: provider.key
+          })
+        } catch (error) {
+          // no-op for async demo flow
         }
-
-        tx.status = 'failed'
-        await tx.save()
-
-        const transferUser = await User.findById(tx.userId)
-        if (!transferUser) return
-
-        const refundBefore = transferUser.walletBalance
-        transferUser.walletBalance += toNumber(tx.amount)
-        await transferUser.save()
-
-        await Transaction.create({
-          userId: transferUser._id,
-          type: 'credit',
-          amount: toNumber(tx.amount),
-          category: 'TRANSFER',
-          description: `Transfer reversal for ${tx.accountName || 'bank transfer'}`,
-          reference: `${tx.reference}-REV`,
-          status: 'success',
-          channel: 'bank_transfer',
-          direction: 'inbound',
-          provider: provider.key,
-          balanceBefore: refundBefore,
-          balanceAfter: transferUser.walletBalance
-        })
-      } catch (error) {
-        // no-op for async demo flow
-      }
-    }, 1500)
+      }, 1500)
+    }
 
     res.status(202).json({
       message: 'Transfer initiated',
@@ -156,12 +231,27 @@ router.post('/transfers', auth, async (req, res) => {
 
 router.get('/transfers/:reference', auth, async (req, res) => {
   try {
-    const tx = await Transaction.findOne({
+    let tx = await Transaction.findOne({
       userId: req.userId,
       reference: req.params.reference,
       channel: 'bank_transfer'
     })
     if (!tx) return res.status(404).json({ error: 'Transfer not found' })
+
+    if (tx.status === 'pending') {
+      const provider = getProvider()
+      const statusResult = await provider.checkTransferStatus({
+        reference: tx.reference,
+        providerReference: tx.providerReference
+      })
+      if (statusResult.success) {
+        tx = await settleTransferStatus({
+          tx,
+          status: statusResult.status,
+          providerKey: provider.key
+        })
+      }
+    }
 
     res.json({
       reference: tx.reference,
@@ -177,49 +267,64 @@ router.get('/transfers/:reference', auth, async (req, res) => {
 })
 
 // Inbound webhook simulation (bank -> Owomi virtual account)
-router.post('/webhooks/inbound', async (req, res) => {
+const handleInboundWebhook = async (req, res) => {
   try {
-    const { accountNumber, amount, payerName, reference } = req.body
-    const numericAmount = toNumber(amount)
-    if (!accountNumber || !numericAmount || !reference) {
-      return res.status(400).json({ error: 'accountNumber, amount and reference are required' })
+    const provider = getProvider()
+    const signature = req.headers['monnify-signature'] || req.headers['x-monnify-signature']
+    if (provider.key === 'monnify' && signature) {
+      const isValidSignature = provider.verifyWebhookSignature?.(req.rawBody, signature)
+      if (!isValidSignature) {
+        return res.status(401).json({ error: 'Invalid webhook signature' })
+      }
     }
 
-    const existing = await Transaction.findOne({ reference })
+    const payload = { ...req.query, ...normalizePayload(req.body) }
+    const inbound = resolveInboundFields(payload)
+    if (!inbound.accountNumber || !inbound.amount || !inbound.reference) {
+      return res.status(400).json({
+        error: 'accountNumber, amount and reference are required',
+        receivedKeys: Object.keys(payload || {})
+      })
+    }
+
+    const existing = await Transaction.findOne({ reference: inbound.reference })
     if (existing) {
-      return res.json({ message: 'Webhook already processed', reference })
+      return res.json({ message: 'Webhook already processed', reference: inbound.reference })
     }
 
-    const user = await User.findOne({ virtualAccountNumber: String(accountNumber) })
+    const user = await User.findOne({ virtualAccountNumber: inbound.accountNumber })
     if (!user) return res.status(404).json({ error: 'Virtual account not found' })
 
     const balanceBefore = user.walletBalance
-    user.walletBalance += numericAmount
+    user.walletBalance += inbound.amount
     await user.save()
 
     await Transaction.create({
       userId: user._id,
       type: 'credit',
-      amount: numericAmount,
+      amount: inbound.amount,
       category: 'TRANSFER',
-      description: `Bank transfer from ${payerName || 'external bank account'}`,
-      merchant: payerName || undefined,
-      reference,
+      description: `Bank transfer from ${inbound.payerName || 'external bank account'}`,
+      merchant: inbound.payerName || undefined,
+      reference: inbound.reference,
       status: 'success',
       channel: 'bank_transfer',
       direction: 'inbound',
-      provider: getProvider().key,
+      provider: provider.key,
       bankName: user.virtualAccountBank,
-      accountNumber: String(accountNumber),
+      accountNumber: inbound.accountNumber,
       accountName: `${user.firstName} ${user.lastName}`,
       balanceBefore,
       balanceAfter: user.walletBalance
     })
 
-    res.json({ message: 'Wallet credited', reference, newBalance: user.walletBalance })
+    res.json({ message: 'Wallet credited', reference: inbound.reference, newBalance: user.walletBalance })
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
-})
+}
+
+router.post('/webhooks/inbound', handleInboundWebhook)
+router.post('/webhooks/monnify', handleInboundWebhook)
 
 module.exports = router

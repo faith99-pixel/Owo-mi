@@ -69,6 +69,8 @@ export default function Dashboard() {
   const [selectedGoal, setSelectedGoal] = useState(null)
   const [savingsAmount, setSavingsAmount] = useState('')
   const [availableBanks, setAvailableBanks] = useState([])
+  const [bankTransferSearchQuery, setBankTransferSearchQuery] = useState('')
+  const [showBankTransferDropdown, setShowBankTransferDropdown] = useState(false)
   const [bankTransferForm, setBankTransferForm] = useState({
     bankCode: '',
     bankName: '',
@@ -78,6 +80,9 @@ export default function Dashboard() {
     narration: ''
   })
   const [bankTransferStatus, setBankTransferStatus] = useState('')
+  const [webhookTestLoading, setWebhookTestLoading] = useState(false)
+  const [lastInboundReference, setLastInboundReference] = useState('')
+  const [copiedVirtualAccount, setCopiedVirtualAccount] = useState(false)
   const [loading, setLoading] = useState(false)
   const [showAmounts, setShowAmounts] = useState(true)
   const [openInsightSection, setOpenInsightSection] = useState('alerts')
@@ -340,6 +345,8 @@ export default function Dashboard() {
 
   const handleOpenBankTransferModal = async () => {
     setShowBankTransferModal(true)
+    setBankTransferSearchQuery('')
+    setShowBankTransferDropdown(false)
     setBankTransferStatus('')
     setBankTransferForm({
       bankCode: '',
@@ -429,6 +436,12 @@ export default function Dashboard() {
     if (!query) return NIGERIAN_BANKS.slice(0, 8)
     return NIGERIAN_BANKS.filter((bank) => bank.toLowerCase().includes(query)).slice(0, 8)
   }, [bankSearchQuery])
+
+  const filteredTransferBanks = useMemo(() => {
+    const query = bankTransferSearchQuery.trim().toLowerCase()
+    if (!query) return availableBanks
+    return availableBanks.filter((bank) => String(bank?.name || '').toLowerCase().includes(query))
+  }, [availableBanks, bankTransferSearchQuery])
 
   const insightDetails = useMemo(() => {
     const debits = transactions.filter((tx) => tx.type === 'debit')
@@ -780,12 +793,48 @@ export default function Dashboard() {
     try {
       if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(accountNumber)
+        setCopiedVirtualAccount(true)
+        setTimeout(() => setCopiedVirtualAccount(false), 1500)
         toast.success('Account number copied')
         return
       }
       toast.error('Clipboard not available')
     } catch (error) {
       toast.error('Failed to copy account number')
+    }
+  }
+
+  const triggerInboundTest = async (useDuplicateReference = false) => {
+    if (!virtualAccountInfo.accountNumber) {
+      toast.error('No virtual account found')
+      return
+    }
+
+    const reference = useDuplicateReference && lastInboundReference
+      ? lastInboundReference
+      : `INB-${Date.now()}`
+
+    setWebhookTestLoading(true)
+    try {
+      const result = await api.simulateInboundTransfer({
+        accountNumber: virtualAccountInfo.accountNumber,
+        amount: 5000,
+        payerName: 'Owomi Test Sender',
+        reference
+      })
+
+      if (result?.error) {
+        toast.error(result.error)
+        return
+      }
+
+      setLastInboundReference(reference)
+      toast.success(useDuplicateReference ? 'Duplicate reference test sent' : 'Inbound test credit successful')
+      loadData()
+    } catch (error) {
+      toast.error('Inbound test failed')
+    } finally {
+      setWebhookTestLoading(false)
     }
   }
 
@@ -870,10 +919,28 @@ export default function Dashboard() {
                         aria-label="Copy account number"
                         title="Copy account number"
                       >
-                        &#128203;
+                        {copiedVirtualAccount ? 'Copied' : 'Copy'}
                       </button>
                     </div>
                     <span>{virtualAccountInfo.accountBank || 'Owomi Settlement Bank'}</span>
+                    <div className="va-actions">
+                      <button
+                        type="button"
+                        className="btn-small"
+                        onClick={() => triggerInboundTest(false)}
+                        disabled={webhookTestLoading}
+                      >
+                        {webhookTestLoading ? 'Testing...' : 'Test Inbound +5000'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-small-outline"
+                        onClick={() => triggerInboundTest(true)}
+                        disabled={webhookTestLoading || !lastInboundReference}
+                      >
+                        Test Duplicate Ref
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -1261,27 +1328,53 @@ export default function Dashboard() {
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <h3>Transfer To Bank</h3>
             <form onSubmit={handleBankTransfer}>
-              <select
-                value={bankTransferForm.bankCode}
-                onChange={(e) => {
-                  const selected = availableBanks.find((b) => b.code === e.target.value)
-                  setBankTransferForm((prev) => ({
-                    ...prev,
-                    bankCode: e.target.value,
-                    bankName: selected?.name || '',
-                    accountName: ''
-                  }))
-                }}
-                required
-              >
-                <option value="">Select bank</option>
-                {availableBanks.map((bank) => (
-                  <option key={bank.code} value={bank.code}>{bank.name}</option>
-                ))}
-              </select>
+              <div className="bank-picker transfer-bank-picker">
+                <input
+                  placeholder="Search and select bank"
+                  value={bankTransferSearchQuery}
+                  onFocus={() => setShowBankTransferDropdown(true)}
+                  onChange={(e) => {
+                    const value = e.target.value
+                    setBankTransferSearchQuery(value)
+                    setShowBankTransferDropdown(true)
+                    setBankTransferForm((prev) => ({
+                      ...prev,
+                      bankCode: '',
+                      bankName: '',
+                      accountName: ''
+                    }))
+                  }}
+                  required
+                />
+                {showBankTransferDropdown && (
+                  <div className="bank-results transfer-bank-results">
+                    {filteredTransferBanks.map((bank) => (
+                      <button
+                        key={bank.code}
+                        type="button"
+                        className={`bank-option ${bankTransferForm.bankCode === bank.code ? 'selected' : ''}`}
+                        onClick={() => {
+                          setBankTransferSearchQuery(bank.name)
+                          setBankTransferForm((prev) => ({
+                            ...prev,
+                            bankCode: bank.code,
+                            bankName: bank.name,
+                            accountName: ''
+                          }))
+                          setShowBankTransferDropdown(false)
+                        }}
+                      >
+                        {bank.name}
+                      </button>
+                    ))}
+                    {!filteredTransferBanks.length && <p className="bank-empty">No bank matches your search</p>}
+                  </div>
+                )}
+              </div>
               <div className="verify-row">
                 <input
                   placeholder="Account Number"
+                  onFocus={() => setShowBankTransferDropdown(false)}
                   value={bankTransferForm.accountNumber}
                   onChange={(e) => setBankTransferForm((prev) => ({ ...prev, accountNumber: e.target.value, accountName: '' }))}
                   required
@@ -1291,18 +1384,21 @@ export default function Dashboard() {
               <input
                 placeholder="Account Name"
                 value={bankTransferForm.accountName}
+                onFocus={() => setShowBankTransferDropdown(false)}
                 readOnly
                 required
               />
               <input
                 type="number"
                 placeholder="Amount"
+                onFocus={() => setShowBankTransferDropdown(false)}
                 value={bankTransferForm.amount}
                 onChange={(e) => setBankTransferForm((prev) => ({ ...prev, amount: e.target.value }))}
                 required
               />
               <input
                 placeholder="Narration (optional)"
+                onFocus={() => setShowBankTransferDropdown(false)}
                 value={bankTransferForm.narration}
                 onChange={(e) => setBankTransferForm((prev) => ({ ...prev, narration: e.target.value }))}
               />
@@ -1444,7 +1540,9 @@ export default function Dashboard() {
         .va-number-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
         .virtual-account-card strong { display: block; font-size: 22px; letter-spacing: 1px; color: #114d38; }
         .virtual-account-card span { font-size: 12px; color: #3f6d5b; }
-        .copy-btn { width: 36px; height: 36px; border-radius: 10px; border: 1px solid #8ed6bb; background: #fff; color: #0b7f54; font-size: 18px; cursor: pointer; }
+        .copy-btn { min-width: 68px; height: 36px; border-radius: 10px; border: 1px solid #8ed6bb; background: #fff; color: #0b7f54; font-size: 12px; font-weight: 800; cursor: pointer; padding: 0 10px; }
+        .va-actions { display: flex; gap: 8px; margin-top: 10px; }
+        .va-actions .btn-small, .va-actions .btn-small-outline { width: auto; padding: 8px 10px; font-size: 12px; }
         .section-header { display: flex; justify-content: space-between; align-items: center; margin: 24px 0 16px; }
         .section-header h3 { font-size: 20px; font-weight: 700; color: #1a1a1a; margin: 0; }
         .link-btn { background: none; border: none; color: #00A86B; font-weight: 600; font-size: 14px; cursor: pointer; }
@@ -1553,6 +1651,11 @@ export default function Dashboard() {
         .btn-inline { width: auto !important; min-width: 86px; padding: 12px 10px !important; border-radius: 10px !important; font-size: 12px !important; }
         .bank-picker { margin-bottom: 10px; position: relative; }
         .bank-results { border: 1px solid #e5e5e5; border-radius: 10px; max-height: 170px; overflow: auto; margin: 0 0 12px; padding: 6px; background: #f8faf9; }
+        .transfer-bank-results { max-height: 220px; overflow-y: auto; margin-top: -2px; }
+        .transfer-bank-results::-webkit-scrollbar { width: 8px; }
+        .transfer-bank-results::-webkit-scrollbar-track { background: #ecf4ef; border-radius: 8px; }
+        .transfer-bank-results::-webkit-scrollbar-thumb { background: #9ccfb8; border-radius: 8px; }
+        .transfer-bank-results::-webkit-scrollbar-thumb:hover { background: #86c1a6; }
         .bank-option { width: 100%; text-align: left; padding: 10px 12px; border: none; border-radius: 10px; background: #fff; color: #222; cursor: pointer; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
         .bank-option:last-child { margin-bottom: 0; }
         .bank-option.selected { background: #eaf8f2; color: #0b7f54; }
