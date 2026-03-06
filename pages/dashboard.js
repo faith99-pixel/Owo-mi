@@ -68,6 +68,7 @@ export default function Dashboard() {
   const [savingsAmount, setSavingsAmount] = useState('')
   const [loading, setLoading] = useState(false)
   const [showAmounts, setShowAmounts] = useState(true)
+  const [openInsightSection, setOpenInsightSection] = useState('alerts')
   const [safeCircleEnabled, setSafeCircleEnabled] = useState(false)
   const [safeCircleInput, setSafeCircleInput] = useState('')
   const [spendCheckAmount, setSpendCheckAmount] = useState('')
@@ -678,6 +679,10 @@ export default function Dashboard() {
     }
   }
 
+  const toggleInsightSection = (sectionId) => {
+    setOpenInsightSection((prev) => (prev === sectionId ? '' : sectionId))
+  }
+
   return (
     <div className="app-container">
       <div className="app-wrapper">
@@ -879,6 +884,23 @@ export default function Dashboard() {
                   <p className="truth-trend">{behaviorInsights.trendText}</p>
                 </div>
 
+                <div className="insight-accordion">
+                  <button className={`accordion-btn ${openInsightSection === 'alerts' ? 'open' : ''}`} onClick={() => toggleInsightSection('alerts')}>
+                    <span>Alerts</span>
+                    <small>{leakAlerts.length ? `${leakAlerts.length} warning(s)` : 'No warnings'}</small>
+                  </button>
+                  <button className={`accordion-btn ${openInsightSection === 'tools' ? 'open' : ''}`} onClick={() => toggleInsightSection('tools')}>
+                    <span>Tools</span>
+                    <small>Fee check, spend check, caps, safe circle, forecast</small>
+                  </button>
+                  <button className={`accordion-btn ${openInsightSection === 'analytics' ? 'open' : ''}`} onClick={() => toggleInsightSection('analytics')}>
+                    <span>Analytics</span>
+                    <small>{insightDetails.categories.length} category card(s), {insightDetails.topMerchants.length} merchant signal(s)</small>
+                  </button>
+                </div>
+
+                {openInsightSection === 'tools' && (
+                  <>
                 <div className="section-header">
                   <h3>Bill Shock Guard</h3>
                 </div>
@@ -973,7 +995,11 @@ export default function Dashboard() {
                     </>
                   )}
                 </div>
+                  </>
+                )}
 
+                {openInsightSection === 'alerts' && (
+                  <>
                 <div className="section-header">
                   <h3>Leakage Watch</h3>
                 </div>
@@ -995,7 +1021,11 @@ export default function Dashboard() {
                     </div>
                   ))}
                 </div>
+                  </>
+                )}
 
+                {openInsightSection === 'analytics' && (
+                  <>
                 <div className="section-header">
                   <h3>Category Breakdown</h3>
                 </div>
@@ -1034,6 +1064,8 @@ export default function Dashboard() {
                   ))}
                   {!insightDetails.topMerchants.length && <p className="empty-state">No merchant pattern yet</p>}
                 </div>
+                  </>
+                )}
               </>
             )}
 
@@ -1251,6 +1283,12 @@ export default function Dashboard() {
         .summary-card { background: #fff; border: 2px solid #e5e5e5; border-radius: 14px; padding: 12px; }
         .summary-card p { font-size: 11px; color: #777; margin: 0 0 6px; }
         .summary-card strong { font-size: 14px; color: #1a1a1a; }
+        .insight-accordion { display: grid; gap: 10px; margin-bottom: 14px; }
+        .accordion-btn { width: 100%; border: 2px solid #e5e5e5; background: #fff; border-radius: 12px; padding: 12px; display: flex; justify-content: space-between; align-items: center; text-align: left; cursor: pointer; }
+        .accordion-btn span { font-size: 15px; font-weight: 800; color: #1a1a1a; }
+        .accordion-btn small { font-size: 11px; color: #777; }
+        .accordion-btn.open { border-color: #8ed6bb; background: #f3fbf7; }
+        .accordion-panel { background: #fff; border: 2px solid #e5e5e5; border-radius: 12px; padding: 4px 12px 12px; }
         .truth-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
         .truth-card { background: #fff; border: 2px solid #e5e5e5; border-radius: 14px; padding: 14px; }
         .truth-card.highlight { background: linear-gradient(135deg, #0d9a65 0%, #0a7f54 100%); border-color: transparent; color: #fff; }
