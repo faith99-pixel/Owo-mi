@@ -5,9 +5,9 @@ const User = require('../models/User');
 
 router.post('/register', async (req, res) => {
   try {
-    const { email, phone, password, firstName, lastName } = req.body;
+    const { email, phone, password, firstName, lastName, gender, profileImageUrl } = req.body;
 
-    if (!email || !phone || !password || !firstName || !lastName) {
+    if (!email || !phone || !password || !firstName || !lastName || !gender) {
       return res.status(400).json({ error: 'All fields are required' });
     }
 
@@ -24,6 +24,8 @@ router.post('/register', async (req, res) => {
       password,
       firstName,
       lastName,
+      gender,
+      profileImageUrl: profileImageUrl || '',
       virtualAccountNumber
     });
 
@@ -42,6 +44,8 @@ router.post('/register', async (req, res) => {
         email: user.email,
         firstName: user.firstName,
         lastName: user.lastName,
+        gender: user.gender,
+        profileImageUrl: user.profileImageUrl,
         walletBalance: user.walletBalance,
         savingsBalance: user.savingsBalance,
         virtualAccountNumber: user.virtualAccountNumber,
@@ -84,6 +88,8 @@ router.post('/login', async (req, res) => {
         email: user.email,
         firstName: user.firstName,
         lastName: user.lastName,
+        gender: user.gender,
+        profileImageUrl: user.profileImageUrl,
         walletBalance: user.walletBalance,
         savingsBalance: user.savingsBalance,
         virtualAccountNumber: user.virtualAccountNumber
