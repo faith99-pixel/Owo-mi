@@ -774,6 +774,21 @@ export default function Dashboard() {
     }
   }
 
+  const handleCopyVirtualAccount = async () => {
+    const accountNumber = virtualAccountInfo.accountNumber || ''
+    if (!accountNumber) return
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(accountNumber)
+        toast.success('Account number copied')
+        return
+      }
+      toast.error('Clipboard not available')
+    } catch (error) {
+      toast.error('Failed to copy account number')
+    }
+  }
+
   const toggleInsightSection = (sectionId) => {
     setOpenInsightSection((prev) => (prev === sectionId ? '' : sectionId))
   }
@@ -846,7 +861,18 @@ export default function Dashboard() {
                 {virtualAccountInfo.accountNumber && (
                   <div className="virtual-account-card">
                     <p>Fund via bank transfer</p>
-                    <strong>{virtualAccountInfo.accountNumber}</strong>
+                    <div className="va-number-row">
+                      <strong>{virtualAccountInfo.accountNumber}</strong>
+                      <button
+                        type="button"
+                        className="copy-btn"
+                        onClick={handleCopyVirtualAccount}
+                        aria-label="Copy account number"
+                        title="Copy account number"
+                      >
+                        &#128203;
+                      </button>
+                    </div>
                     <span>{virtualAccountInfo.accountBank || 'Owomi Settlement Bank'}</span>
                   </div>
                 )}
@@ -1415,8 +1441,10 @@ export default function Dashboard() {
         .action-btn small { font-size: 11px; font-weight: 600; color: #333; }
         .virtual-account-card { background: #f4fbf8; border: 2px dashed #8ed6bb; border-radius: 14px; padding: 12px; margin: -8px 0 18px; }
         .virtual-account-card p { margin: 0 0 4px; font-size: 12px; color: #0b7f54; font-weight: 700; text-transform: uppercase; }
+        .va-number-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
         .virtual-account-card strong { display: block; font-size: 22px; letter-spacing: 1px; color: #114d38; }
         .virtual-account-card span { font-size: 12px; color: #3f6d5b; }
+        .copy-btn { width: 36px; height: 36px; border-radius: 10px; border: 1px solid #8ed6bb; background: #fff; color: #0b7f54; font-size: 18px; cursor: pointer; }
         .section-header { display: flex; justify-content: space-between; align-items: center; margin: 24px 0 16px; }
         .section-header h3 { font-size: 20px; font-weight: 700; color: #1a1a1a; margin: 0; }
         .link-btn { background: none; border: none; color: #00A86B; font-weight: 600; font-size: 14px; cursor: pointer; }
