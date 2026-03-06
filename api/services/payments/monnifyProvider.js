@@ -5,6 +5,8 @@ const MONNIFY_BASE_URL = process.env.MONNIFY_BASE_URL || 'https://api.monnify.co
 const MONNIFY_API_KEY = process.env.MONNIFY_API_KEY || ''
 const MONNIFY_SECRET_KEY = process.env.MONNIFY_SECRET_KEY || ''
 const MONNIFY_CONTRACT_CODE = process.env.MONNIFY_CONTRACT_CODE || ''
+const MONNIFY_SOURCE_ACCOUNT_NUMBER = process.env.MONNIFY_SOURCE_ACCOUNT_NUMBER || ''
+const MONNIFY_ORIGIN = MONNIFY_BASE_URL.replace(/\/api\/v1\/?$/i, '')
 
 let tokenCache = { token: '', expiresAt: 0 }
 
@@ -88,6 +90,10 @@ const monnifyProvider = {
 
   async initiateTransfer({ reference, bankCode, accountNumber, accountName, amount, narration }) {
     try {
+      if (!MONNIFY_SOURCE_ACCOUNT_NUMBER) {
+        return { success: false, error: 'Set MONNIFY_SOURCE_ACCOUNT_NUMBER in api/.env for disbursements.' }
+      }
+
       const config = await withBearer()
       const payload = {
         amount,
@@ -96,10 +102,12 @@ const monnifyProvider = {
         destinationBankCode: bankCode,
         destinationAccountNumber: accountNumber,
         destinationAccountName: accountName,
-        currency: 'NGN'
+        currency: 'NGN',
+        sourceAccountNumber: MONNIFY_SOURCE_ACCOUNT_NUMBER,
+        async: true
       }
 
-      const response = await request.post('/disbursements/single', payload, config)
+      const response = await request.post(`${MONNIFY_ORIGIN}/api/v2/disbursements/single`, payload, config)
       const body = response.data?.responseBody || {}
       return {
         success: true,
@@ -114,7 +122,7 @@ const monnifyProvider = {
   async checkTransferStatus({ reference }) {
     try {
       const config = await withBearer()
-      const response = await request.get('/disbursements/single/summary', {
+      const response = await request.get(`${MONNIFY_ORIGIN}/api/v2/disbursements/single/summary`, {
         ...config,
         params: { reference }
       })

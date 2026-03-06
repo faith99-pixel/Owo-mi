@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useRouter } from 'next/router'
 import toast from 'react-hot-toast'
 import { parseTransaction, detectLeaks } from '../lib/parser'
@@ -71,6 +71,7 @@ export default function Dashboard() {
   const [availableBanks, setAvailableBanks] = useState([])
   const [bankTransferSearchQuery, setBankTransferSearchQuery] = useState('')
   const [showBankTransferDropdown, setShowBankTransferDropdown] = useState(false)
+  const bankTransferPickerRef = useRef(null)
   const [bankTransferForm, setBankTransferForm] = useState({
     bankCode: '',
     bankName: '',
@@ -154,6 +155,17 @@ export default function Dashboard() {
   useEffect(() => {
     localStorage.setItem('owomi_safe_circle_members', safeCircleInput)
   }, [safeCircleInput])
+
+  useEffect(() => {
+    if (!showBankTransferDropdown) return
+    const handleOutsideClick = (event) => {
+      if (!bankTransferPickerRef.current?.contains(event.target)) {
+        setShowBankTransferDropdown(false)
+      }
+    }
+    document.addEventListener('mousedown', handleOutsideClick)
+    return () => document.removeEventListener('mousedown', handleOutsideClick)
+  }, [showBankTransferDropdown])
 
   const persistCards = (nextCards) => {
     setCards(nextCards)
@@ -923,6 +935,9 @@ export default function Dashboard() {
                       </button>
                     </div>
                     <span>{virtualAccountInfo.accountBank || 'Owomi Settlement Bank'}</span>
+                    <p className="va-note">
+                      Send money from your bank app to this account number.
+                    </p>
                     <div className="va-actions">
                       <button
                         type="button"
@@ -930,7 +945,7 @@ export default function Dashboard() {
                         onClick={() => triggerInboundTest(false)}
                         disabled={webhookTestLoading}
                       >
-                        {webhookTestLoading ? 'Testing...' : 'Test Inbound +5000'}
+                        {webhookTestLoading ? 'Testing...' : 'Simulate Credit +N5,000'}
                       </button>
                       <button
                         type="button"
@@ -938,9 +953,10 @@ export default function Dashboard() {
                         onClick={() => triggerInboundTest(true)}
                         disabled={webhookTestLoading || !lastInboundReference}
                       >
-                        Test Duplicate Ref
+                        Re-send Last Reference
                       </button>
                     </div>
+                    {lastInboundReference ? <p className="va-last-ref">Last test reference: {lastInboundReference}</p> : null}
                   </div>
                 )}
 
@@ -1328,24 +1344,34 @@ export default function Dashboard() {
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <h3>Transfer To Bank</h3>
             <form onSubmit={handleBankTransfer}>
-              <div className="bank-picker transfer-bank-picker">
-                <input
-                  placeholder="Search and select bank"
-                  value={bankTransferSearchQuery}
-                  onFocus={() => setShowBankTransferDropdown(true)}
-                  onChange={(e) => {
-                    const value = e.target.value
-                    setBankTransferSearchQuery(value)
-                    setShowBankTransferDropdown(true)
-                    setBankTransferForm((prev) => ({
-                      ...prev,
-                      bankCode: '',
-                      bankName: '',
-                      accountName: ''
-                    }))
-                  }}
-                  required
-                />
+              <div className="bank-picker transfer-bank-picker" ref={bankTransferPickerRef}>
+                <div className="transfer-bank-input-row">
+                  <input
+                    placeholder="Search and select bank"
+                    value={bankTransferSearchQuery}
+                    onFocus={() => setShowBankTransferDropdown(true)}
+                    onChange={(e) => {
+                      const value = e.target.value
+                      setBankTransferSearchQuery(value)
+                      setShowBankTransferDropdown(true)
+                      setBankTransferForm((prev) => ({
+                        ...prev,
+                        bankCode: '',
+                        bankName: '',
+                        accountName: ''
+                      }))
+                    }}
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="transfer-dropdown-toggle"
+                    onClick={() => setShowBankTransferDropdown((prev) => !prev)}
+                    aria-label={showBankTransferDropdown ? 'Close bank list' : 'Open bank list'}
+                  >
+                    {showBankTransferDropdown ? '▲' : '▼'}
+                  </button>
+                </div>
                 {showBankTransferDropdown && (
                   <div className="bank-results transfer-bank-results">
                     {filteredTransferBanks.map((bank) => (
@@ -1540,6 +1566,8 @@ export default function Dashboard() {
         .va-number-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
         .virtual-account-card strong { display: block; font-size: 22px; letter-spacing: 1px; color: #114d38; }
         .virtual-account-card span { font-size: 12px; color: #3f6d5b; }
+        .va-note { margin: 8px 0 0; font-size: 12px !important; font-weight: 500 !important; text-transform: none !important; color: #4f6f62 !important; line-height: 1.4; }
+        .va-last-ref { margin: 8px 0 0; font-size: 11px; color: #678477; word-break: break-all; }
         .copy-btn { min-width: 68px; height: 36px; border-radius: 10px; border: 1px solid #8ed6bb; background: #fff; color: #0b7f54; font-size: 12px; font-weight: 800; cursor: pointer; padding: 0 10px; }
         .va-actions { display: flex; gap: 8px; margin-top: 10px; }
         .va-actions .btn-small, .va-actions .btn-small-outline { width: auto; padding: 8px 10px; font-size: 12px; }
@@ -1651,7 +1679,11 @@ export default function Dashboard() {
         .btn-inline { width: auto !important; min-width: 86px; padding: 12px 10px !important; border-radius: 10px !important; font-size: 12px !important; }
         .bank-picker { margin-bottom: 10px; position: relative; }
         .bank-results { border: 1px solid #e5e5e5; border-radius: 10px; max-height: 170px; overflow: auto; margin: 0 0 12px; padding: 6px; background: #f8faf9; }
-        .transfer-bank-results { max-height: 220px; overflow-y: auto; margin-top: -2px; }
+        .transfer-bank-picker { margin-bottom: 12px; position: relative; }
+        .transfer-bank-input-row { position: relative; }
+        .transfer-bank-input-row input { margin-bottom: 0; padding-right: 42px; }
+        .transfer-dropdown-toggle { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); width: 30px !important; min-width: 30px !important; height: 30px; border: none; border-radius: 8px !important; background: #f2f4f3 !important; color: #1f4235; font-size: 12px; padding: 0 !important; cursor: pointer; }
+        .transfer-bank-results { position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 40; max-height: 220px; overflow-y: auto; margin: 0; box-shadow: 0 10px 24px rgba(0, 0, 0, 0.15); }
         .transfer-bank-results::-webkit-scrollbar { width: 8px; }
         .transfer-bank-results::-webkit-scrollbar-track { background: #ecf4ef; border-radius: 8px; }
         .transfer-bank-results::-webkit-scrollbar-thumb { background: #9ccfb8; border-radius: 8px; }
