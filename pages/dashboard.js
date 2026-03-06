@@ -35,12 +35,31 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(false)
   const [showAmounts, setShowAmounts] = useState(true)
 
+  const parseStoredUser = (raw) => {
+    if (!raw) return null
+    try {
+      const parsed = JSON.parse(raw)
+      return parsed && typeof parsed === 'object' ? parsed : null
+    } catch {
+      if (typeof raw === 'string') {
+        return { email: raw, firstName: raw.split('@')[0] }
+      }
+      return null
+    }
+  }
+
   useEffect(() => {
-    if (!localStorage.getItem('user')) {
+    const rawUser = localStorage.getItem('user')
+    if (!rawUser) {
       router.push('/login')
       return
     }
-    const user = JSON.parse(localStorage.getItem('user'))
+    const user = parseStoredUser(rawUser)
+    if (!user) {
+      localStorage.removeItem('user')
+      router.push('/login')
+      return
+    }
     setUserInitial(user.firstName?.charAt(0) || 'O')
     const privacy = localStorage.getItem('owomi_show_amounts')
     if (privacy !== null) {
@@ -48,7 +67,12 @@ export default function Dashboard() {
     }
     const savedCards = localStorage.getItem('owomi_cards')
     if (savedCards) {
-      setCards(JSON.parse(savedCards))
+      try {
+        const parsedCards = JSON.parse(savedCards)
+        setCards(Array.isArray(parsedCards) ? parsedCards : [])
+      } catch {
+        setCards([])
+      }
     }
     loadData()
   }, [router])
