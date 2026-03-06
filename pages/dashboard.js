@@ -47,6 +47,7 @@ export default function Dashboard() {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState('home')
   const [userInitial, setUserInitial] = useState('O')
+  const [userAvatar, setUserAvatar] = useState('/avatar-neutral.svg')
   const [balance, setBalance] = useState({ walletBalance: 0, savingsBalance: 0, totalBalance: 0 })
   const [transactions, setTransactions] = useState([])
   const [goals, setGoals] = useState([])
@@ -67,6 +68,10 @@ export default function Dashboard() {
   const [savingsAmount, setSavingsAmount] = useState('')
   const [loading, setLoading] = useState(false)
   const [showAmounts, setShowAmounts] = useState(true)
+  const [safeCircleEnabled, setSafeCircleEnabled] = useState(false)
+  const [safeCircleInput, setSafeCircleInput] = useState('')
+  const [spendCheckAmount, setSpendCheckAmount] = useState('')
+  const [spendCheckCategory, setSpendCheckCategory] = useState('TRANSFER')
 
   const parseStoredUser = (raw) => {
     if (!raw) return null
@@ -94,9 +99,19 @@ export default function Dashboard() {
       return
     }
     setUserInitial(user.firstName?.charAt(0) || 'O')
+    const fallbackAvatar = getDefaultAvatarForGender(user.gender)
+    setUserAvatar(user.profileImageUrl || fallbackAvatar)
     const privacy = localStorage.getItem('owomi_show_amounts')
     if (privacy !== null) {
       setShowAmounts(privacy === 'true')
+    }
+    const savedSafeCircleEnabled = localStorage.getItem('owomi_safe_circle_enabled')
+    if (savedSafeCircleEnabled !== null) {
+      setSafeCircleEnabled(savedSafeCircleEnabled === 'true')
+    }
+    const savedSafeCircleMembers = localStorage.getItem('owomi_safe_circle_members')
+    if (savedSafeCircleMembers) {
+      setSafeCircleInput(savedSafeCircleMembers)
     }
     const savedCards = localStorage.getItem('owomi_cards')
     if (savedCards) {
@@ -109,6 +124,14 @@ export default function Dashboard() {
     }
     loadData()
   }, [router])
+
+  useEffect(() => {
+    localStorage.setItem('owomi_safe_circle_enabled', String(safeCircleEnabled))
+  }, [safeCircleEnabled])
+
+  useEffect(() => {
+    localStorage.setItem('owomi_safe_circle_members', safeCircleInput)
+  }, [safeCircleInput])
 
   const persistCards = (nextCards) => {
     setCards(nextCards)
@@ -525,10 +548,127 @@ export default function Dashboard() {
     }
   }, [transactions])
 
+  const safeCircleMembers = useMemo(() => {
+    return safeCircleInput
+      .split(',')
+      .map((name) => name.trim())
+      .filter(Boolean)
+      .slice(0, 3)
+  }, [safeCircleInput])
+
+  const billShockGuard = useMemo(() => {
+    const debitTx = transactions.filter((tx) => tx.type === 'debit')
+    if (!debitTx.length) {
+      return { hasAlert: false, headline: 'No debit activity yet', detail: 'Import or create transactions to activate Bill Shock Guard.' }
+    }
+
+    const now = new Date()
+    const todayKey = now.toISOString().slice(0, 10)
+    const todaySpend = debitTx
+      .filter((tx) => {
+        const date = new Date(tx.createdAt)
+        return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === todayKey
+      })
+      .reduce((sum, tx) => sum + toNumber(tx.amount), 0)
+
+    const weekday = now.getUTCDay()
+    const historicalSameDay = debitTx.filter((tx) => {
+      const date = new Date(tx.createdAt)
+      if (!Number.isFinite(date.getTime())) return false
+      if (date.toISOString().slice(0, 10) === todayKey) return false
+      return date.getUTCDay() === weekday
+    })
+    const sameDayAvg = historicalSameDay.length
+      ? historicalSameDay.reduce((sum, tx) => sum + toNumber(tx.amount), 0) / historicalSameDay.length
+      : 0
+
+    const ratio = sameDayAvg > 0 ? todaySpend / sameDayAvg : (todaySpend > 0 ? 1 : 0)
+    const hasAlert = todaySpend > 0 && ((sameDayAvg > 0 && ratio >= 1.8) || todaySpend >= 15000)
+    const headline = hasAlert
+      ? `Spend spike detected: ${ratio > 0 ? ratio.toFixed(1) : '1.0'}x your usual ${now.toLocaleDateString(undefined, { weekday: 'long' })}`
+      : 'No unusual spending spike detected today'
+    const detail = sameDayAvg > 0
+      ? `Today: N${formatCurrency(todaySpend)} vs baseline: N${formatCurrency(sameDayAvg)}`
+      : `Today: N${formatCurrency(todaySpend)}. More history needed for a baseline.`
+
+    return { hasAlert, headline, detail }
+  }, [transactions])
+
+  const feeLeakInsights = useMemo(() => {
+    const debitTx = transactions.filter((tx) => tx.type === 'debit')
+    const posCount = debitTx.filter((tx) => (tx.category || '').toUpperCase() === 'POS').length
+    const transferCount = debitTx.filter((tx) => (tx.category || '').toUpperCase() === 'TRANSFER').length
+    const atmCount = debitTx.filter((tx) => {
+      const text = `${tx.description || ''} ${tx.merchant || ''}`.toUpperCase()
+      return text.includes('ATM')
+    }).length
+
+    const posFees = posCount * 100
+    const transferFees = transferCount * 25
+    const atmFees = atmCount * 35
+    const monthlyEstimate = posFees + transferFees + atmFees
+    const yearlyEstimate = monthlyEstimate * 12
+
+    return { posCount, transferCount, atmCount, monthlyEstimate, yearlyEstimate }
+  }, [transactions])
+
+  const spendCheckResult = useMemo(() => {
+    const amount = toNumber(spendCheckAmount)
+    const category = (spendCheckCategory || 'TRANSFER').toUpperCase()
+    if (!amount) return null
+
+    const weeklyCategorySpend = transactions
+      .filter((tx) => tx.type === 'debit' && (tx.category || '').toUpperCase() === category)
+      .reduce((sum, tx) => sum + toNumber(tx.amount), 0)
+    const projected = weeklyCategorySpend + amount
+    const risk = projected >= 20000 || amount >= 7000 ? 'high' : projected >= 10000 ? 'medium' : 'low'
+
+    const message = risk === 'high'
+      ? `High risk: this pushes ${category} to about N${formatCurrency(projected)}.`
+      : risk === 'medium'
+        ? `Caution: ${category} will reach about N${formatCurrency(projected)}.`
+        : `Low risk: projected ${category} spend is N${formatCurrency(projected)}.`
+
+    return { risk, message, projected }
+  }, [spendCheckAmount, spendCheckCategory, transactions])
+
+  const goalLinkedCaps = useMemo(() => {
+    if (!goals.length) return []
+    const weeklySpend = behaviorInsights.weeklyTotal
+    return goals.slice(0, 2).map((goal) => {
+      const target = toNumber(goal.targetAmount)
+      const current = toNumber(goal.currentAmount)
+      const remaining = Math.max(target - current, 0)
+      const suggestedWeeklyLeakCut = Math.max(1000, Math.round(Math.min(remaining / 6, weeklySpend * 0.2)))
+      const weeksFaster = suggestedWeeklyLeakCut > 0 ? Math.max(1, Math.round(remaining / suggestedWeeklyLeakCut)) : 0
+      return {
+        id: goal._id || goal.id || goal.title,
+        title: goal.title,
+        suggestedWeeklyLeakCut,
+        weeksFaster
+      }
+    })
+  }, [goals, behaviorInsights.weeklyTotal])
+
+  const cashflowForecast = useMemo(() => {
+    const debitTx = transactions.filter((tx) => tx.type === 'debit')
+    if (!debitTx.length) {
+      return { daysLeft: null, dailyBurn: 0 }
+    }
+    const dailyBurn = behaviorInsights.weeklyTotal > 0 ? behaviorInsights.weeklyTotal / 7 : 0
+    const wallet = toNumber(balance?.walletBalance)
+    const daysLeft = dailyBurn > 0 ? Math.floor(wallet / dailyBurn) : null
+    return { daysLeft, dailyBurn }
+  }, [transactions, behaviorInsights.weeklyTotal, balance])
+
   const handleShareTruthReport = async () => {
     try {
+      const report = safeCircleEnabled && safeCircleMembers.length
+        ? `${behaviorInsights.shameText}\nSafe Circle: ${safeCircleMembers.join(', ')}`
+        : behaviorInsights.shameText
+
       if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(behaviorInsights.shameText)
+        await navigator.clipboard.writeText(report)
         toast.success('Truth report copied. Share it anywhere.')
         return
       }
@@ -548,7 +688,14 @@ export default function Dashboard() {
               <p>Your money tracker</p>
             </div>
             <button className="avatar-btn" onClick={() => router.push('/login')}>
-              {userInitial}
+              <img
+                src={userAvatar}
+                alt="User avatar"
+                className="avatar-image"
+                onError={(e) => {
+                  e.currentTarget.src = '/avatar-neutral.svg'
+                }}
+              />
             </button>
           </header>
 
@@ -730,6 +877,101 @@ export default function Dashboard() {
                     <strong>{behaviorInsights.leakiestMerchant}</strong>
                   </div>
                   <p className="truth-trend">{behaviorInsights.trendText}</p>
+                </div>
+
+                <div className="section-header">
+                  <h3>Bill Shock Guard</h3>
+                </div>
+                <div className={`guard-card ${billShockGuard.hasAlert ? 'alert' : ''}`}>
+                  <strong>{billShockGuard.headline}</strong>
+                  <p>{billShockGuard.detail}</p>
+                </div>
+
+                <div className="section-header">
+                  <h3>Fee Leak Calculator</h3>
+                </div>
+                <div className="fee-grid">
+                  <div className="fee-item">
+                    <p>Estimated monthly fees</p>
+                    <strong className={!showAmounts ? 'masked' : ''}>N{formatCurrency(feeLeakInsights.monthlyEstimate)}</strong>
+                    <span>POS: {feeLeakInsights.posCount}  Transfer: {feeLeakInsights.transferCount}  ATM: {feeLeakInsights.atmCount}</span>
+                  </div>
+                  <div className="fee-item">
+                    <p>Estimated yearly fees</p>
+                    <strong className={!showAmounts ? 'masked' : ''}>N{formatCurrency(feeLeakInsights.yearlyEstimate)}</strong>
+                    <span>Projected at current transaction behavior</span>
+                  </div>
+                </div>
+
+                <div className="section-header">
+                  <h3>Before You Spend Check</h3>
+                </div>
+                <div className="spend-check-card">
+                  <div className="spend-check-row">
+                    <input
+                      type="number"
+                      placeholder="Amount"
+                      value={spendCheckAmount}
+                      onChange={(e) => setSpendCheckAmount(e.target.value)}
+                    />
+                    <select value={spendCheckCategory} onChange={(e) => setSpendCheckCategory(e.target.value)}>
+                      <option value="TRANSFER">TRANSFER</option>
+                      <option value="BETTING">BETTING</option>
+                      <option value="POS">POS</option>
+                      <option value="AIRTIME">AIRTIME</option>
+                      <option value="DATA">DATA</option>
+                    </select>
+                  </div>
+                  {spendCheckResult && (
+                    <p className={`spend-check-result ${spendCheckResult.risk}`}>{spendCheckResult.message}</p>
+                  )}
+                </div>
+
+                <div className="section-header">
+                  <h3>Goal-Linked Auto Caps</h3>
+                </div>
+                <div className="fix-list">
+                  {goalLinkedCaps.map((goalCap) => (
+                    <div className="fix-item" key={goalCap.id}>
+                      <strong>{goalCap.title}</strong>
+                      <p>Cut leak spending by about N{formatCurrency(goalCap.suggestedWeeklyLeakCut)} weekly to move this goal forward by about {goalCap.weeksFaster} week(s).</p>
+                    </div>
+                  ))}
+                  {!goalLinkedCaps.length && <p className="empty-state">Create a savings goal to get auto-cap recommendations.</p>}
+                </div>
+
+                <div className="section-header">
+                  <h3>Safe Circle Mode</h3>
+                </div>
+                <div className="safe-circle-card">
+                  <label className="safe-circle-toggle">
+                    <input
+                      type="checkbox"
+                      checked={safeCircleEnabled}
+                      onChange={(e) => setSafeCircleEnabled(e.target.checked)}
+                    />
+                    <span>Enable accountability sharing</span>
+                  </label>
+                  <input
+                    placeholder="Names (comma-separated, max 3)"
+                    value={safeCircleInput}
+                    onChange={(e) => setSafeCircleInput(e.target.value)}
+                  />
+                  <p>{safeCircleEnabled && safeCircleMembers.length ? `Weekly report will include: ${safeCircleMembers.join(', ')}` : 'Add 1-3 trusted people for weekly accountability.'}</p>
+                </div>
+
+                <div className="section-header">
+                  <h3>Cashflow Survival Forecast</h3>
+                </div>
+                <div className="guard-card">
+                  {cashflowForecast.daysLeft === null ? (
+                    <p>No forecast yet. Add debit history to estimate wallet runway.</p>
+                  ) : (
+                    <>
+                      <strong>{cashflowForecast.daysLeft} day(s) of runway at current leak rate</strong>
+                      <p>Daily burn estimate: N{formatCurrency(cashflowForecast.dailyBurn)}</p>
+                    </>
+                  )}
                 </div>
 
                 <div className="section-header">
@@ -961,7 +1203,8 @@ export default function Dashboard() {
         .app-header { display: flex; justify-content: space-between; align-items: center; padding: 20px; background: linear-gradient(135deg, #00A86B 0%, #008751 100%); color: #fff; }
         .app-header h1 { font-size: 28px; font-weight: 800; margin: 0; }
         .app-header p { font-size: 14px; opacity: 0.9; margin: 4px 0 0; }
-        .avatar-btn { width: 44px; height: 44px; border-radius: 50%; background: rgba(255,255,255,0.2); border: 2px solid rgba(255,255,255,0.3); color: #fff; font-weight: 700; font-size: 18px; cursor: pointer; }
+        .avatar-btn { width: 46px; height: 46px; border-radius: 50%; background: rgba(255,255,255,0.2); border: 2px solid rgba(255,255,255,0.3); color: #fff; font-weight: 700; font-size: 18px; cursor: pointer; overflow: hidden; padding: 0; }
+        .avatar-image { width: 100%; height: 100%; object-fit: cover; display: block; }
         .tab-content { flex: 1; padding: 20px; overflow-y: auto; padding-bottom: 100px; }
         .balance-card { background: linear-gradient(135deg, #00A86B 0%, #008751 100%); border-radius: 20px; padding: 24px; color: #fff; box-shadow: 0 8px 24px rgba(0,168,107,0.3); margin-bottom: 20px; }
         .balance-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
@@ -970,9 +1213,9 @@ export default function Dashboard() {
         .balance-amount { font-size: 42px; font-weight: 800; margin: 0 0 12px; }
         .balance-row { display: flex; gap: 10px; }
         .balance-badge { background: rgba(255,255,255,0.2); padding: 8px 16px; border-radius: 20px; font-size: 13px; font-weight: 600; }
-        .action-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 24px; }
-        .action-btn { background: #f9f9f9; border: 2px solid #e5e5e5; border-radius: 16px; padding: 16px 8px; display: flex; flex-direction: column; align-items: center; gap: 8px; cursor: pointer; }
-        .action-btn span { font-size: 28px; }
+        .action-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 24px; }
+        .action-btn { background: #f9f9f9; border: 2px solid #e5e5e5; border-radius: 16px; padding: 12px 8px; min-height: 92px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; cursor: pointer; }
+        .action-btn span { font-size: 24px; }
         .action-btn small { font-size: 11px; font-weight: 600; color: #333; }
         .section-header { display: flex; justify-content: space-between; align-items: center; margin: 24px 0 16px; }
         .section-header h3 { font-size: 20px; font-weight: 700; color: #1a1a1a; margin: 0; }
@@ -1021,6 +1264,26 @@ export default function Dashboard() {
         .truth-row:last-of-type { border-bottom: none; }
         .truth-row strong { color: #1a1a1a; text-align: right; }
         .truth-trend { margin: 10px 0 0; font-size: 12px; color: #0a7f54; font-weight: 700; }
+        .guard-card { background: #fff; border: 2px solid #e5e5e5; border-radius: 12px; padding: 12px; margin-bottom: 14px; }
+        .guard-card.alert { border-color: #f6b0b0; background: #fff7f7; }
+        .guard-card strong { font-size: 14px; color: #222; display: block; }
+        .guard-card p { margin: 6px 0 0; font-size: 13px; color: #555; }
+        .fee-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+        .fee-item { background: #fff; border: 2px solid #e5e5e5; border-radius: 12px; padding: 12px; }
+        .fee-item p { margin: 0 0 4px; font-size: 12px; color: #666; }
+        .fee-item strong { font-size: 18px; color: #111; }
+        .fee-item span { display: block; margin-top: 6px; font-size: 11px; color: #777; }
+        .spend-check-card { background: #fff; border: 2px solid #e5e5e5; border-radius: 12px; padding: 12px; margin-bottom: 14px; }
+        .spend-check-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .spend-check-row input, .spend-check-row select { width: 100%; border: 2px solid #e5e5e5; border-radius: 10px; font-size: 13px; padding: 10px; }
+        .spend-check-result { margin: 10px 0 0; font-size: 12px; font-weight: 700; }
+        .spend-check-result.low { color: #0b7f54; }
+        .spend-check-result.medium { color: #a66c00; }
+        .spend-check-result.high { color: #a63b3b; }
+        .safe-circle-card { background: #fff; border: 2px solid #e5e5e5; border-radius: 12px; padding: 12px; margin-bottom: 14px; }
+        .safe-circle-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; color: #222; margin-bottom: 10px; }
+        .safe-circle-card input[type='text'], .safe-circle-card input[type='email'], .safe-circle-card input:not([type='checkbox']) { width: 100%; border: 2px solid #e5e5e5; border-radius: 10px; font-size: 13px; padding: 10px; margin-bottom: 8px; }
+        .safe-circle-card p { margin: 0; font-size: 12px; color: #666; }
         .leakage-list { display: grid; gap: 8px; margin-bottom: 14px; }
         .leakage-item { background: #fff4f4; color: #a63b3b; border: 1px solid #ffd6d6; border-radius: 12px; padding: 10px 12px; font-size: 13px; }
         .fix-list { display: grid; gap: 10px; margin-bottom: 14px; }
@@ -1061,8 +1324,13 @@ export default function Dashboard() {
         .modal-content textarea { min-height: 120px; resize: vertical; }
         .modal-content button { width: 100%; padding: 14px; background: #00A86B; color: #fff; border: none; border-radius: 10px; font-weight: 700; cursor: pointer; }
         .modal-content button:disabled { opacity: 0.6; }
+        @media (min-width: 520px) {
+          .action-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+        }
         @media (max-width: 480px) {
           .truth-grid { grid-template-columns: 1fr; }
+          .fee-grid { grid-template-columns: 1fr; }
+          .spend-check-row { grid-template-columns: 1fr; }
         }
         @media (min-width: 768px) {
           .app-wrapper { padding: 24px; }
@@ -1081,5 +1349,12 @@ function getCategoryIcon(category) {
     SAVINGS: '💰', FUNDING: '💳', WITHDRAWAL: '🏧'
   }
   return icons[category] || '💳'
+}
+
+
+function getDefaultAvatarForGender(gender) {
+  if ((gender || '').toLowerCase() === 'female') return '/avatar-female.svg'
+  if ((gender || '').toLowerCase() === 'male') return '/avatar-male.svg'
+  return '/avatar-neutral.svg'
 }
 
