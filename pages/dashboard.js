@@ -649,22 +649,51 @@ export default function Dashboard() {
     }
   }
 
-  const handleDeleteGoal = (goalId) => {
+const handleDeleteGoal = (goalId) => {
+    console.log('Delete goal clicked:', goalId)
+    if (!goalId) {
+      console.error('Invalid goal ID')
+      return
+    }
     setGoalToDelete(goalId)
     setShowDeleteGoalModal(true)
   }
 
   const confirmDeleteGoal = async () => {
-    if (!goalToDelete) return
+    const goalId = goalToDelete
+    if (!goalId) {
+      console.log('No goal to delete')
+      return
+    }
+    
+    console.log('Confirming delete for goal:', goalId)
     setLoading(true)
+    
     try {
-      await api.deleteGoal(goalToDelete)
-      toast.success('Goal deleted!')
+      // Close modal immediately
       setShowDeleteGoalModal(false)
+      
+      // Call API first
+      const result = await api.deleteGoal(goalId)
+      console.log('Delete API result:', result)
+      
+      // Show success message
+      const refundedMsg = result?.refundedAmount > 0 
+        ? ` (₦${result.refundedAmount.toLocaleString()} refunded to wallet)` 
+        : ''
+      toast.success(`Goal deleted!${refundedMsg}`)
+      
+      // Clear goal to delete
       setGoalToDelete(null)
-      loadData()
+      
+      // Force a complete data reload to ensure UI is in sync
+      await loadData()
+      
     } catch (error) {
+      console.error('Delete error:', error)
       toast.error(error.error || 'Failed to delete goal')
+      // Reload to restore correct state
+      loadData()
     } finally {
       setLoading(false)
     }
@@ -992,8 +1021,8 @@ export default function Dashboard() {
     if (!actionableFixes.length) {
       actionableFixes.push('Your leak pattern is stable. Keep the streak and review top merchants before each weekend.')
     }
-
     const trendDirection = previousWeeklyTotal > 0
+
       ? ((weeklyTotal - previousWeeklyTotal) / previousWeeklyTotal) * 100
       : 0
     const trendText = previousWeeklyTotal > 0
@@ -2218,6 +2247,30 @@ export default function Dashboard() {
         </div>
       )}
 
+      {showDeleteGoalModal && (
+        <div className="modal-overlay" onClick={() => { setShowDeleteGoalModal(false); setGoalToDelete(null) }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <h3>Delete Goal</h3>
+            <p className="modal-helper">Are you sure you want to delete this goal? This action cannot be undone.</p>
+            <div className="modal-actions">
+              <button 
+                className="btn-small-outline" 
+                onClick={() => { setShowDeleteGoalModal(false); setGoalToDelete(null) }}
+              >
+                Cancel
+              </button>
+              <button 
+                className="btn-small-danger" 
+                onClick={confirmDeleteGoal}
+                disabled={loading}
+              >
+                {loading ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {selectedGoal && (
         <div className="modal-overlay" onClick={() => setSelectedGoal(null)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
@@ -2626,7 +2679,8 @@ export default function Dashboard() {
         .goal-date { font-size: 12px; color: #777; margin-top: 8px; }
         .goal-status { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 20px; }
         .goal-status.paid { background: #e8f5e9; color: #2e7d32; }
-        .goal-status.pending { background: #fff8e6; color: #a66c00; }
+.goal-status.pending { background: #fff8e6; color: #a66c00; }
+        .modal-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
       `}</style>
     </div>
   )
