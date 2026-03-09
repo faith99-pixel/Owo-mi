@@ -8,6 +8,13 @@ const TABS = [
   { id: 'home', label: 'Home', icon: '🏠' },
   { id: 'cards', label: 'Cards', icon: '💳' },
   { id: 'savings', label: 'Savings', icon: '💰' },
+  { id: 'split', label: 'Split', icon: '🔄' },
+  // { id: 'debts', label: 'Debts', icon: '🤝' },
+  // { id: 'goals', label: 'Goals', icon: '🎯' },
+  // { id: 'subs', label: 'Subs', icon: '📱' },
+  // { id: 'budget', label: 'Budget', icon: '📋' },
+  // { id: 'invest', label: 'Invest', icon: '📈' },
+  { id: 'invoice', label: 'Invoice', icon: '📄' },
   { id: 'insights', label: 'Insights', icon: '📊' },
   { id: 'history', label: 'History', icon: '📜' }
 ]
@@ -91,6 +98,333 @@ export default function Dashboard() {
   const [safeCircleInput, setSafeCircleInput] = useState('')
   const [spendCheckAmount, setSpendCheckAmount] = useState('')
   const [spendCheckCategory, setSpendCheckCategory] = useState('TRANSFER')
+  const [showDeleteGoalModal, setShowDeleteGoalModal] = useState(false)
+  const [goalToDelete, setGoalToDelete] = useState(null)
+
+  // New feature states
+  const [expenseSplits, setExpenseSplits] = useState([])
+  const [showSplitModal, setShowSplitModal] = useState(false)
+  const [splitForm, setSplitForm] = useState({
+    title: '',
+    totalAmount: '',
+    category: 'food',
+    participants: ''
+  })
+  const [splitFilter, setSplitFilter] = useState('all') // all, active, settled
+  const [expandedParticipants, setExpandedParticipants] = useState({}) // Track which splits have expanded participants
+  const [debts, setDebts] = useState([])
+  const [showDebtModal, setShowDebtModal] = useState(false)
+  const [debtForm, setDebtForm] = useState({
+    name: '',
+    amount: '',
+    debtType: 'owed_to_me',
+    phone: ''
+  })
+  const [subscriptions, setSubscriptions] = useState([])
+  const [showSubsModal, setShowSubsModal] = useState(false)
+  const [subsForm, setSubsForm] = useState({
+    name: '',
+    amount: '',
+    billingCycle: 'monthly',
+    nextBillingDate: ''
+  })
+
+  // Financial Goals state
+  const [financialGoals, setFinancialGoals] = useState([])
+  const [showFinancialGoalModal, setShowFinancialGoalModal] = useState(false)
+  const [financialGoalForm, setFinancialGoalForm] = useState({
+    goalType: 'savings',
+    title: '',
+    description: '',
+    emoji: '🎯',
+    targetAmount: '',
+    targetDate: '',
+    category: 'general'
+  })
+  const [contributeToGoal, setContributeToGoal] = useState(null)
+  const [contributeAmount, setContributeAmount] = useState('')
+
+  // Invoices state
+  const [invoices, setInvoices] = useState([])
+  const [showInvoiceModal, setShowInvoiceModal] = useState(false)
+  const [invoiceForm, setInvoiceForm] = useState({
+    title: '',
+    clientName: '',
+    clientEmail: '',
+    clientPhone: '',
+    items: [{ description: '', quantity: 1, unitPrice: 0 }],
+    tax: 0,
+    discount: 0,
+    dueDate: '',
+    notes: ''
+  })
+
+  // Load new feature data
+  const loadFeatureData = async () => {
+    try {
+      const [splitsData, debtsData, subsData, invoicesData, goalsData] = await Promise.all([
+        api.getExpenseSplits(),
+        api.getDebts(),
+        api.getSubscriptions(),
+        api.getInvoices(),
+        api.getFinancialGoals()
+      ])
+      setExpenseSplits(Array.isArray(splitsData) ? splitsData : [])
+      setDebts(Array.isArray(debtsData) ? debtsData : [])
+      setSubscriptions(Array.isArray(subsData) ? subsData : [])
+      setInvoices(Array.isArray(invoicesData) ? invoicesData : [])
+      setFinancialGoals(Array.isArray(goalsData) ? goalsData : [])
+    } catch (error) {
+      console.error('Error loading feature data:', error)
+    }
+  }
+
+  // Handler for creating invoice
+  const handleCreateInvoice = async (e) => {
+    e.preventDefault()
+    setLoading(true)
+    try {
+      const subtotal = invoiceForm.items.reduce((sum, item) => sum + (toNumber(item.quantity) * toNumber(item.unitPrice)), 0)
+      const total = subtotal + toNumber(invoiceForm.tax) - toNumber(invoiceForm.discount)
+      
+      await api.createInvoice({
+        title: invoiceForm.title,
+        clientName: invoiceForm.clientName,
+        clientEmail: invoiceForm.clientEmail,
+        clientPhone: invoiceForm.clientPhone,
+        items: invoiceForm.items,
+        tax: parseFloat(invoiceForm.tax) || 0,
+        discount: parseFloat(invoiceForm.discount) || 0,
+        total: total,
+        dueDate: invoiceForm.dueDate,
+        notes: invoiceForm.notes
+      })
+      toast.success('Invoice created!')
+      setShowInvoiceModal(false)
+      setInvoiceForm({
+        title: '',
+        clientName: '',
+        clientEmail: '',
+        clientPhone: '',
+        items: [{ description: '', quantity: 1, unitPrice: 0 }],
+        tax: 0,
+        discount: 0,
+        dueDate: '',
+        notes: ''
+      })
+      loadFeatureData()
+    } catch (error) {
+      toast.error('Failed to create invoice')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Handler for marking invoice as paid
+  const handleMarkInvoicePaid = async (invoiceId) => {
+    setLoading(true)
+    try {
+      await api.markInvoicePaid(invoiceId)
+      toast.success('Invoice marked as paid!')
+      loadFeatureData()
+    } catch (error) {
+      toast.error('Failed to update invoice')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Add invoice item to form
+  const addInvoiceItem = () => {
+    setInvoiceForm(prev => ({
+      ...prev,
+      items: [...prev.items, { description: '', quantity: 1, unitPrice: 0 }]
+    }))
+  }
+
+  // Remove invoice item from form
+  const removeInvoiceItem = (index) => {
+    setInvoiceForm(prev => ({
+      ...prev,
+      items: prev.items.filter((_, i) => i !== index)
+    }))
+  }
+
+  // Update invoice item
+  const updateInvoiceItem = (index, field, value) => {
+    setInvoiceForm(prev => ({
+      ...prev,
+      items: prev.items.map((item, i) => 
+        i === index ? { ...item, [field]: value } : item
+      )
+    }))
+  }
+
+  // Handler for creating expense split
+  const handleCreateSplit = async (e) => {
+    e.preventDefault()
+    setLoading(true)
+    try {
+      const participantNames = splitForm.participants.split(',').map(p => p.trim()).filter(Boolean)
+      const participants = participantNames.map(name => ({ name }))
+      await api.createExpenseSplit({
+        title: splitForm.title,
+        totalAmount: parseFloat(splitForm.totalAmount),
+        category: splitForm.category,
+        participants: participants,
+        splitType: 'equal'
+      })
+      toast.success('Expense split created!')
+      setShowSplitModal(false)
+      setSplitForm({ title: '', totalAmount: '', category: 'food', participants: '' })
+      loadFeatureData()
+    } catch (error) {
+      toast.error('Failed to create split')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Handler for settling a split
+  const handleSettleSplit = async (splitId, participantIndex, participantName) => {
+    setLoading(true)
+    try {
+      await api.settleExpenseSplit(splitId, participantIndex, participantName)
+      toast.success('Marked as settled!')
+      loadFeatureData()
+    } catch (error) {
+      toast.error('Failed to settle')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Toggle expanded state for participants in a split
+  const toggleParticipants = (splitId) => {
+    setExpandedParticipants(prev => ({
+      ...prev,
+      [splitId]: !prev[splitId]
+    }))
+  }
+
+  // Handler for creating debt
+  const handleCreateDebt = async (e) => {
+    e.preventDefault()
+    setLoading(true)
+    try {
+      await api.createDebt({
+        name: debtForm.name,
+        amount: parseFloat(debtForm.amount),
+        debtType: debtForm.debtType,
+        phone: debtForm.phone
+      })
+      toast.success('Debt record added!')
+      setShowDebtModal(false)
+      setDebtForm({ name: '', amount: '', debtType: 'owed_to_me', phone: '' })
+      loadFeatureData()
+    } catch (error) {
+      toast.error('Failed to add debt')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Handler for creating subscription
+  const handleCreateSubscription = async (e) => {
+    e.preventDefault()
+    setLoading(true)
+    try {
+      await api.createSubscription({
+        name: subsForm.name,
+        amount: parseFloat(subsForm.amount),
+        billingCycle: subsForm.billingCycle,
+        nextBillingDate: subsForm.nextBillingDate
+      })
+      toast.success('Subscription added!')
+      setShowSubsModal(false)
+      setSubsForm({ name: '', amount: '', billingCycle: 'monthly', nextBillingDate: '' })
+      loadFeatureData()
+    } catch (error) {
+      toast.error('Failed to add subscription')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Handler for creating financial goal
+  const handleCreateFinancialGoal = async (e) => {
+    e.preventDefault()
+    setLoading(true)
+    try {
+      await api.createFinancialGoal({
+        goalType: financialGoalForm.goalType,
+        title: financialGoalForm.title,
+        description: financialGoalForm.description,
+        emoji: financialGoalForm.emoji,
+        targetAmount: parseFloat(financialGoalForm.targetAmount),
+        targetDate: financialGoalForm.targetDate,
+        category: financialGoalForm.category
+      })
+      toast.success('Financial goal created!')
+      setShowFinancialGoalModal(false)
+      setFinancialGoalForm({
+        goalType: 'savings',
+        title: '',
+        description: '',
+        emoji: '🎯',
+        targetAmount: '',
+        targetDate: '',
+        category: 'general'
+      })
+      loadFeatureData()
+    } catch (error) {
+      toast.error('Failed to create goal')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Computed stats for splits
+  const splitStats = useMemo(() => {
+    const active = expenseSplits.filter(s => s.status !== 'settled').length
+    const settled = expenseSplits.filter(s => s.status === 'settled').length
+    // Calculate totals for owed/owe
+    const totalOwed = expenseSplits.reduce((sum, split) => {
+      if (!split.participants) return sum
+      return sum + split.participants
+        .filter(p => !p.isPaid && p.name !== split.ownerName)
+        .reduce((s, p) => s + toNumber(p.shareAmount || 0), 0)
+    }, 0)
+    const totalOwe = expenseSplits.reduce((sum, split) => {
+      if (!split.participants) return sum
+      return sum + split.participants
+        .filter(p => !p.isPaid && p.name === split.ownerName)
+        .reduce((s, p) => s + toNumber(p.shareAmount || 0), 0)
+    }, 0)
+    return { active, settled, totalOwed, totalOwe }
+  }, [expenseSplits])
+
+  // Filtered splits based on filter
+  const filteredSplits = useMemo(() => {
+    if (splitFilter === 'all') return expenseSplits
+    return expenseSplits.filter(s => splitFilter === 'settled' ? s.status === 'settled' : s.status !== 'settled')
+  }, [expenseSplits, splitFilter])
+
+  // Computed stats for debts
+  const debtStats = useMemo(() => {
+    const owedToMe = debts.filter(d => d.debtType === 'owed_to_me').reduce((sum, d) => sum + toNumber(d.amount - d.paidAmount), 0)
+    const iOwe = debts.filter(d => d.debtType === 'i_owe').reduce((sum, d) => sum + toNumber(d.amount - d.paidAmount), 0)
+    return { owedToMe, iOwe }
+  }, [debts])
+
+  // Computed stats for subscriptions
+  const subsStats = useMemo(() => {
+    const active = subscriptions.length
+    const monthlyCost = subscriptions
+      .filter(s => s.billingCycle === 'monthly')
+      .reduce((sum, s) => sum + toNumber(s.amount), 0)
+    return { active, monthlyCost }
+  }, [subscriptions])
 
   const parseStoredUser = (raw) => {
     if (!raw) return null
@@ -146,6 +480,7 @@ export default function Dashboard() {
       }
     }
     loadData()
+    loadFeatureData()
   }, [router])
 
   useEffect(() => {
@@ -309,6 +644,27 @@ export default function Dashboard() {
       loadData()
     } catch (error) {
       toast.error(error.error || 'Failed to withdraw')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleDeleteGoal = (goalId) => {
+    setGoalToDelete(goalId)
+    setShowDeleteGoalModal(true)
+  }
+
+  const confirmDeleteGoal = async () => {
+    if (!goalToDelete) return
+    setLoading(true)
+    try {
+      await api.deleteGoal(goalToDelete)
+      toast.success('Goal deleted!')
+      setShowDeleteGoalModal(false)
+      setGoalToDelete(null)
+      loadData()
+    } catch (error) {
+      toast.error(error.error || 'Failed to delete goal')
     } finally {
       setLoading(false)
     }
@@ -938,25 +1294,6 @@ export default function Dashboard() {
                     <p className="va-note">
                       Send money from your bank app to this account number.
                     </p>
-                    <div className="va-actions">
-                      <button
-                        type="button"
-                        className="btn-small"
-                        onClick={() => triggerInboundTest(false)}
-                        disabled={webhookTestLoading}
-                      >
-                        {webhookTestLoading ? 'Testing...' : 'Simulate Credit +N5,000'}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-small-outline"
-                        onClick={() => triggerInboundTest(true)}
-                        disabled={webhookTestLoading || !lastInboundReference}
-                      >
-                        Re-send Last Reference
-                      </button>
-                    </div>
-                    {lastInboundReference ? <p className="va-last-ref">Last test reference: {lastInboundReference}</p> : null}
                   </div>
                 )}
 
@@ -1022,7 +1359,10 @@ export default function Dashboard() {
                     <div className="goal-card" key={goal._id || goal.id || index}>
                       <div className="goal-header">
                         <h4>{goal.title}</h4>
-                        <span className="goal-emoji">{goal.emoji}</span>
+                        <div className="goal-header-actions">
+                          <span className="goal-emoji">{goal.emoji}</span>
+                          <button onClick={() => handleDeleteGoal(goal._id || goal.id)} className="btn-delete-icon" title="Delete Goal">🗑️</button>
+                        </div>
                       </div>
                       <div className="goal-progress">
                         <div className="progress-bar">
@@ -1037,6 +1377,356 @@ export default function Dashboard() {
                     </div>
                   ))}
                   {!goals.length && <p className="empty-state">No savings goals yet. Create one!</p>}
+                </div>
+              </>
+            )}
+
+            {/* EXPENSE SPLIT TAB */}
+            {activeTab === 'split' && (
+              <>
+                <div className="insights-hero">
+                  <h2>🔄 Expense Split</h2>
+                  <p>Split bills with friends</p>
+                </div>
+                
+                {/* Summary Cards */}
+                <div className="split-summary-grid">
+                  <div className="split-summary-card owed">
+                    <span className="split-summary-icon">📥</span>
+                    <div>
+                      <p>You are owed</p>
+                      <strong className={!showAmounts ? 'masked' : ''}>₦{formatCurrency(splitStats.totalOwed)}</strong>
+                    </div>
+                  </div>
+                  <div className="split-summary-card owe">
+                    <span className="split-summary-icon">📤</span>
+                    <div>
+                      <p>You owe</p>
+                      <strong className={!showAmounts ? 'masked' : ''}>₦{formatCurrency(splitStats.totalOwe)}</strong>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Action Buttons */}
+                <div className="split-actions">
+                  <button className="split-action-btn primary" onClick={() => setShowSplitModal(true)}>
+                    <span>➕</span> Create Split
+                  </button>
+                  <button className="split-action-btn" onClick={() => setSplitFilter('active')}>
+                    <span>⏳</span> Pending
+                  </button>
+                  <button className="split-action-btn" onClick={() => setSplitFilter('settled')}>
+                    <span>✅</span> Settled
+                  </button>
+                </div>
+                
+                {/* Filter indicator */}
+                {splitFilter !== 'all' && (
+                  <div className="split-filter-bar">
+                    <span>Showing: {splitFilter === 'active' ? 'Pending' : 'Settled'}</span>
+                    <button onClick={() => setSplitFilter('all')}>Show All</button>
+                  </div>
+                )}
+                
+                {/* Split Cards List */}
+                <div className="split-list">
+                  {filteredSplits.map((split) => (
+                    <div className="split-card" key={split._id || split.id}>
+                      {/* Split Header */}
+                      <div className="split-card-header">
+                        <div className="split-card-title">
+                          <span className="split-category-emoji">
+                            {split.category === 'food' ? '🍔' : split.category === 'transport' ? '🚗' : split.category === 'entertainment' ? '🎬' : split.category === 'shopping' ? '🛍️' : split.category === 'rent' ? '🏠' : split.category === 'utilities' ? '💡' : split.category === 'travel' ? '✈️' : split.category === 'events' ? '🎉' : '💰'}
+                          </span>
+                          <div>
+                            <h4>{split.title}</h4>
+                            <p className="split-meta">
+                              {split.splitType === 'equal' ? 'Equal split' : split.splitType === 'percentage' ? 'By percentage' : 'Custom'} • {split.participants?.length || 0} people
+                            </p>
+                          </div>
+                        </div>
+                        <span className={`split-status ${split.status}`}>
+                          {split.status === 'settled' ? '✅ Settled' : '⏳ Pending'}
+                        </span>
+                      </div>
+                      
+                      {/* Split Amount */}
+                      <div className="split-card-amount">
+                        <div className="split-total">
+                          <span>Total</span>
+                          <strong className={!showAmounts ? 'masked' : ''}>₦{formatCurrency(split.totalAmount)}</strong>
+                        </div>
+                        <div className="split-your-share">
+                          <span>Your share</span>
+                          <strong className={!showAmounts ? 'masked' : ''}>₦{formatCurrency(split.myShare || 0)}</strong>
+                        </div>
+                      </div>
+                      
+                      {/* Participants */}
+                      <div className="split-participants">
+                        <p className="split-participants-label">
+                          Participants ({split.participants?.length || 0})
+                          {split.participants?.length > 5 && (
+                            <button 
+                              className="toggle-participants-btn"
+                              onClick={() => toggleParticipants(split._id || split.id)}
+                            >
+                              {expandedParticipants[split._id || split.id] ? 'Show less' : `Show all (${split.participants.length})`}
+                            </button>
+                          )}
+                        </p>
+                        <div className="split-participants-list">
+                          {split.participants?.slice(0, expandedParticipants[split._id || split.id] ? undefined : 5).map((participant, idx) => (
+                            <div 
+                              key={idx} 
+                              className={`split-participant ${participant.isPaid ? 'paid' : participant.name === split.ownerName ? 'owner' : ''}`}
+                            >
+                              <div className="split-participant-info">
+                                <span className="split-participant-avatar">
+                                  {participant.name?.charAt(0).toUpperCase() || '?'}
+                                </span>
+                                <div className="split-participant-details">
+                                  <span className="split-participant-name">
+                                    {participant.name}
+                                    {participant.name === split.ownerName && <span className="owner-badge">You</span>}
+                                  </span>
+                                  <span className="split-participant-share">
+                                    {!showAmounts ? '****' : `₦${formatCurrency(participant.shareAmount)}`}
+                                    {participant.sharePercentage && ` (${participant.sharePercentage}%)`}
+                                  </span>
+                                </div>
+                              </div>
+                              <button 
+                                className={`split-settle-btn ${participant.isPaid ? 'settled' : ''}`}
+                                onClick={() => handleSettleSplit(split._id || split.id, idx, participant.name)}
+                                disabled={participant.isPaid || loading || participant.name === split.ownerName}
+                              >
+                                {participant.isPaid ? '✓ Paid' : participant.name === split.ownerName ? 'Owner' : 'Mark Paid'}
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {!filteredSplits.length && (
+                    <div className="empty-split-state">
+                      <span className="empty-icon">🧾</span>
+                      <p>No {splitFilter !== 'all' ? splitFilter : ''} splits yet</p>
+                      <button onClick={() => setShowSplitModal(true)}>Create your first split</button>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
+            {/* DEBTS TAB */}
+            {activeTab === 'debts' && (
+              <>
+                <div className="insights-hero">
+                  <h2>🤝 Debt Tracker</h2>
+                  <p>Track money owed</p>
+                </div>
+                <div className="info-card">
+                  <p>📱 Feature coming soon!</p>
+                  <p className="info-detail">Track money you've lent to friends or loans you need to repay.</p>
+                </div>
+                <div className="quick-stats-grid">
+                  <div className="quick-stat">
+                    <span className="stat-icon">📥</span>
+                    <div>
+                      <p>Owed to You</p>
+                      <strong className={!showAmounts ? 'masked' : ''}>₦0</strong>
+                    </div>
+                  </div>
+                  <div className="quick-stat">
+                    <span className="stat-icon">📤</span>
+                    <div>
+                      <p>You Owe</p>
+                      <strong className={!showAmounts ? 'masked' : ''}>₦0</strong>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* FINANCIAL GOALS TAB */}
+            {activeTab === 'goals' && (
+              <>
+                <div className="insights-hero">
+                  <h2>🎯 Financial Goals</h2>
+                  <p>Milestones & celebrations</p>
+                </div>
+                
+                <div className="section-header">
+                  <h3>Your Goals</h3>
+                  <button onClick={() => setShowFinancialGoalModal(true)} className="link-btn">+ New Goal</button>
+                </div>
+
+                <div className="goals-list">
+                  {financialGoals.length > 0 ? financialGoals.map((goal, index) => (
+                    <div className="goal-card" key={goal._id || goal.id || index}>
+                      <div className="goal-header">
+                        <h4>{goal.emoji} {goal.title}</h4>
+                        <span className={`goal-status ${goal.status}`}>{goal.status}</span>
+                      </div>
+                      {goal.description && <p className="goal-description">{goal.description}</p>}
+                      <div className="goal-progress">
+                        <div className="progress-bar">
+                          <div className="progress-fill" style={{ width: `${Math.min((toNumber(goal.currentAmount) / Math.max(toNumber(goal.targetAmount), 1)) * 100, 100)}%` }}></div>
+                        </div>
+                        <p className={!showAmounts ? 'masked' : ''}>
+                          ₦{formatCurrency(goal.currentAmount)} / ₦{formatCurrency(goal.targetAmount)} 
+                          ({Math.round((toNumber(goal.currentAmount) / Math.max(toNumber(goal.targetAmount), 1)) * 100)}%)
+                        </p>
+                      </div>
+                      {goal.targetDate && <p className="goal-date">Target: {new Date(goal.targetDate).toLocaleDateString()}</p>}
+                      <div className="goal-actions">
+                        <button onClick={() => { setContributeToGoal(goal); setContributeAmount(''); }} className="btn-small">Contribute</button>
+                      </div>
+                    </div>
+                  )) : (
+                    <div className="empty-state">
+                      <p>No financial goals yet. Create one to start tracking!</p>
+                      <button onClick={() => setShowFinancialGoalModal(true)} className="btn-small">Create Goal</button>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
+            {/* SUBSCRIPTIONS TAB */}
+            {activeTab === 'subs' && (
+              <>
+                <div className="insights-hero">
+                  <h2>📱 Subscriptions</h2>
+                  <p>Track recurring payments</p>
+                </div>
+                <div className="info-card">
+                  <p>📱 Feature coming soon!</p>
+                  <p className="info-detail">Track Netflix, DSTV, data plans and get reminded before renewal.</p>
+                </div>
+                <div className="quick-stats-grid">
+                  <div className="quick-stat">
+                    <span className="stat-icon">📺</span>
+                    <div>
+                      <p>Active Subs</p>
+                      <strong>0</strong>
+                    </div>
+                  </div>
+                  <div className="quick-stat">
+                    <span className="stat-icon">💳</span>
+                    <div>
+                      <p>Monthly Cost</p>
+                      <strong className={!showAmounts ? 'masked' : ''}>₦0</strong>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* BUDGET CAPS TAB */}
+            {activeTab === 'budget' && (
+              <>
+                <div className="insights-hero">
+                  <h2>📋 Budget Caps</h2>
+                  <p>Spending limits per category</p>
+                </div>
+                <div className="info-card">
+                  <p>📱 Feature coming soon!</p>
+                  <p className="info-detail">Set weekly/monthly limits on categories and get alerts when approaching limits.</p>
+                </div>
+                <div className="quick-stats-grid">
+                  <div className="quick-stat">
+                    <span className="stat-icon">⚠️</span>
+                    <div>
+                      <p>Exceeded</p>
+                      <strong>0</strong>
+                    </div>
+                  </div>
+                  <div className="quick-stat">
+                    <span className="stat-icon">✅</span>
+                    <div>
+                      <p>On Track</p>
+                      <strong>0</strong>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* INVESTMENTS TAB */}
+            {activeTab === 'invest' && (
+              <>
+                <div className="insights-hero">
+                  <h2>📈 Investments</h2>
+                  <p>Track your portfolio</p>
+                </div>
+                <div className="info-card">
+                  <p>📱 Feature coming soon!</p>
+                  <p className="info-detail">Track stocks, crypto, savings, and see your portfolio value.</p>
+                </div>
+                <div className="quick-stats-grid">
+                  <div className="quick-stat">
+                    <span className="stat-icon">💵</span>
+                    <div>
+                      <p>Total Value</p>
+                      <strong className={!showAmounts ? 'masked' : ''}>₦0</strong>
+                    </div>
+                  </div>
+                  <div className="quick-stat">
+                    <span className="stat-icon">📊</span>
+                    <div>
+                      <p>Returns</p>
+                      <strong className="positive">+0%</strong>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* INVOICE TAB */}
+            {activeTab === 'invoice' && (
+              <>
+                <div className="insights-hero">
+                  <h2>📄 Invoices</h2>
+                  <p>Generate invoices</p>
+                </div>
+                
+                <div className="section-header">
+                  <h3>Your Invoices</h3>
+                  <button onClick={() => setShowInvoiceModal(true)} className="link-btn">+ New Invoice</button>
+                </div>
+
+                <div className="goals-list">
+                  {invoices.length > 0 ? invoices.map((invoice, index) => (
+                    <div className="goal-card" key={invoice._id || invoice.id || index}>
+                      <div className="goal-header">
+                        <h4>{invoice.title}</h4>
+                        <span className={`goal-status ${invoice.status}`}>{invoice.status}</span>
+                      </div>
+                      <div className="goal-meta">
+                        <p>Invoice #{invoice.invoiceNumber}</p>
+                        <p>Client: {invoice.clientName}</p>
+                      </div>
+                      <div className="goal-progress">
+                        <p className={!showAmounts ? 'masked' : ''}>
+                          ₦{formatCurrency(invoice.total)}
+                        </p>
+                      </div>
+                      {invoice.dueDate && <p className="goal-date">Due: {new Date(invoice.dueDate).toLocaleDateString()}</p>}
+                      <div className="goal-actions">
+                        {invoice.status !== 'paid' && (
+                          <button onClick={() => handleMarkInvoicePaid(invoice._id)} className="btn-small">Mark Paid</button>
+                        )}
+                      </div>
+                    </div>
+                  )) : (
+                    <div className="empty-state">
+                      <p>No invoices yet. Create one to get paid!</p>
+                      <button onClick={() => setShowInvoiceModal(true)} className="btn-small">Create Invoice</button>
+                    </div>
+                  )}
                 </div>
               </>
             )}
@@ -1540,6 +2230,144 @@ export default function Dashboard() {
         </div>
       )}
 
+      {showSplitModal && (
+        <div className="modal-overlay" onClick={() => setShowSplitModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <h3>Create Expense Split</h3>
+            <form onSubmit={handleCreateSplit}>
+              <input placeholder="Split title (e.g., Dinner at Eko)" value={splitForm.title} onChange={(e) => setSplitForm({ ...splitForm, title: e.target.value })} required />
+              <input type="number" placeholder="Total amount" value={splitForm.totalAmount} onChange={(e) => setSplitForm({ ...splitForm, totalAmount: e.target.value })} required />
+              <select value={splitForm.category} onChange={(e) => setSplitForm({ ...splitForm, category: e.target.value })}>
+                <option value="food">🍔 Food</option>
+                <option value="transport">🚗 Transport</option>
+                <option value="entertainment">🎬 Entertainment</option>
+                <option value="shopping">🛍️ Shopping</option>
+                <option value="utilities">💡 Utilities</option>
+                <option value="other">📦 Other</option>
+              </select>
+              <input placeholder="Participants (comma-separated names)" value={splitForm.participants} onChange={(e) => setSplitForm({ ...splitForm, participants: e.target.value })} required />
+              <button type="submit" disabled={loading}>{loading ? 'Creating...' : 'Create Split'}</button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showFinancialGoalModal && (
+        <div className="modal-overlay" onClick={() => setShowFinancialGoalModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <h3>Create Financial Goal</h3>
+            <form onSubmit={handleCreateFinancialGoal}>
+              <select value={financialGoalForm.goalType} onChange={(e) => setFinancialGoalForm({ ...financialGoalForm, goalType: e.target.value })}>
+                <option value="savings">💰 Savings Goal</option>
+                <option value="debt">💳 Debt Payoff</option>
+                <option value="purchase">🛍️ Purchase Goal</option>
+              </select>
+              <input placeholder="Goal Title" value={financialGoalForm.title} onChange={(e) => setFinancialGoalForm({ ...financialGoalForm, title: e.target.value })} required />
+              <textarea placeholder="Description (optional)" value={financialGoalForm.description} onChange={(e) => setFinancialGoalForm({ ...financialGoalForm, description: e.target.value })} />
+              <input type="number" placeholder="Target Amount" value={financialGoalForm.targetAmount} onChange={(e) => setFinancialGoalForm({ ...financialGoalForm, targetAmount: e.target.value })} required />
+              <input type="date" placeholder="Target Date (optional)" value={financialGoalForm.targetDate} onChange={(e) => setFinancialGoalForm({ ...financialGoalForm, targetDate: e.target.value })} />
+              <button type="submit" disabled={loading}>{loading ? 'Creating...' : 'Create Goal'}</button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showInvoiceModal && (
+        <div className="modal-overlay" onClick={() => setShowInvoiceModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <h3>Create Invoice</h3>
+            <form onSubmit={handleCreateInvoice}>
+              <input 
+                placeholder="Invoice Title" 
+                value={invoiceForm.title} 
+                onChange={(e) => setInvoiceForm({ ...invoiceForm, title: e.target.value })} 
+                required 
+              />
+              <input 
+                placeholder="Client Name" 
+                value={invoiceForm.clientName} 
+                onChange={(e) => setInvoiceForm({ ...invoiceForm, clientName: e.target.value })} 
+                required 
+              />
+              <input 
+                placeholder="Client Email (optional)" 
+                type="email"
+                value={invoiceForm.clientEmail} 
+                onChange={(e) => setInvoiceForm({ ...invoiceForm, clientEmail: e.target.value })} 
+              />
+              <input 
+                placeholder="Client Phone (optional)" 
+                value={invoiceForm.clientPhone} 
+                onChange={(e) => setInvoiceForm({ ...invoiceForm, clientPhone: e.target.value })} 
+              />
+              
+              {/* Invoice Items */}
+              <div className="invoice-items-section">
+                <p className="invoice-items-label">Items</p>
+                {invoiceForm.items.map((item, index) => (
+                  <div key={index} className="invoice-item-row">
+                    <input 
+                      placeholder="Description"
+                      value={item.description}
+                      onChange={(e) => updateInvoiceItem(index, 'description', e.target.value)}
+                      required
+                    />
+                    <input 
+                      type="number"
+                      placeholder="Qty"
+                      value={item.quantity}
+                      onChange={(e) => updateInvoiceItem(index, 'quantity', e.target.value)}
+                      className="invoice-qty"
+                    />
+                    <input 
+                      type="number"
+                      placeholder="Price"
+                      value={item.unitPrice}
+                      onChange={(e) => updateInvoiceItem(index, 'unitPrice', e.target.value)}
+                      className="invoice-price"
+                    />
+                    {invoiceForm.items.length > 1 && (
+                      <button type="button" className="remove-item-btn" onClick={() => removeInvoiceItem(index)}>×</button>
+                    )}
+                  </div>
+                ))}
+                <button type="button" className="add-item-btn" onClick={addInvoiceItem}>+ Add Item</button>
+              </div>
+              
+              <div className="invoice-totals-row">
+                <input 
+                  type="number"
+                  placeholder="Tax"
+                  value={invoiceForm.tax}
+                  onChange={(e) => setInvoiceForm({ ...invoiceForm, tax: e.target.value })}
+                  className="invoice-tax"
+                />
+                <input 
+                  type="number"
+                  placeholder="Discount"
+                  value={invoiceForm.discount}
+                  onChange={(e) => setInvoiceForm({ ...invoiceForm, discount: e.target.value })}
+                  className="invoice-discount"
+                />
+              </div>
+              
+              <input 
+                type="date"
+                placeholder="Due Date"
+                value={invoiceForm.dueDate}
+                onChange={(e) => setInvoiceForm({ ...invoiceForm, dueDate: e.target.value })} 
+              />
+              <textarea 
+                placeholder="Notes (optional)"
+                value={invoiceForm.notes}
+                onChange={(e) => setInvoiceForm({ ...invoiceForm, notes: e.target.value })} 
+              />
+              <button type="submit" disabled={loading}>{loading ? 'Creating...' : 'Create Invoice'}</button>
+            </form>
+          </div>
+        </div>
+      )}
+
       <style jsx>{`
         .app-container { min-height: 100vh; background: linear-gradient(135deg, #f5f7fa 0%, #e8ecf1 100%); }
         .app-wrapper { max-width: 600px; margin: 0 auto; }
@@ -1590,6 +2418,12 @@ export default function Dashboard() {
         .goal-card { background: #fff; border: 2px solid #e5e5e5; border-radius: 16px; padding: 20px; }
         .goal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
         .goal-header h4 { font-size: 18px; font-weight: 700; color: #1a1a1a; margin: 0; }
+        .goal-header-actions { display: flex; align-items: center; gap: 8px; }
+        .goal-emoji { font-size: 32px; }
+        .btn-delete-icon { background: none; border: none; font-size: 18px; cursor: pointer; padding: 4px; opacity: 0.7; }
+        .btn-delete-icon:hover { opacity: 1; }
+        .goal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+        .goal-header h4 { font-size: 18px; font-weight: 700; color: #1a1a1a; margin: 0; }
         .goal-emoji { font-size: 32px; }
         .goal-progress { margin-bottom: 16px; }
         .progress-bar { height: 8px; background: #e5e5e5; border-radius: 4px; overflow: hidden; margin-bottom: 8px; }
@@ -1598,13 +2432,32 @@ export default function Dashboard() {
         .goal-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         .btn-small { padding: 10px; background: #00A86B; color: #fff; border: none; border-radius: 10px; font-weight: 600; cursor: pointer; }
         .btn-small-outline { padding: 10px; background: transparent; color: #00A86B; border: 2px solid #00A86B; border-radius: 10px; font-weight: 600; cursor: pointer; }
+        .btn-small-danger { padding: 10px; background: #fff; color: #c62828; border: 2px solid #c62828; border-radius: 10px; font-weight: 600; cursor: pointer; }
+        .goal-delete-action { margin-top: 10px; }
         .insights-hero { text-align: center; margin-bottom: 24px; }
         .insights-hero h2 { font-size: 28px; font-weight: 800; color: #1a1a1a; margin: 0 0 8px; }
         .total-spent { font-size: 20px; color: #00A86B; font-weight: 700; }
+        .btn-disabled { opacity: 0.6; cursor: not-allowed; }
+        .participants-list { margin-top: 12px; padding-top: 12px; border-top: 1px dashed #e5e5e5; }
+        .participants-label { font-size: 12px; font-weight: 600; color: #666; margin: 0 0 8px; }
+        .participant-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; background: #f9f9f9; border-radius: 8px; margin-bottom: 6px; }
+        .participant-row.paid { background: #e8f5e9; }
+        .participant-info { display: flex; flex-direction: column; }
+        .participant-name { font-size: 13px; font-weight: 600; color: #333; }
+        .participant-amount { font-size: 12px; color: #666; }
         .insight-summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
         .summary-card { background: #fff; border: 2px solid #e5e5e5; border-radius: 14px; padding: 12px; }
         .summary-card p { font-size: 11px; color: #777; margin: 0 0 6px; }
         .summary-card strong { font-size: 14px; color: #1a1a1a; }
+        .quick-stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+        .quick-stat { background: #fff; border: 2px solid #e5e5e5; border-radius: 14px; padding: 16px; display: flex; align-items: center; gap: 12px; }
+        .quick-stat .stat-icon { font-size: 28px; }
+        .quick-stat div { flex: 1; }
+        .quick-stat p { font-size: 12px; color: #777; margin: 0 0 4px; }
+        .quick-stat strong { font-size: 18px; color: #1a1a1a; }
+        .info-card { background: #f8f9fa; border: 2px dashed #ccc; border-radius: 14px; padding: 20px; text-align: center; margin-bottom: 20px; }
+        .info-card p { font-size: 16px; font-weight: 600; color: #333; margin: 0 0 8px; }
+        .info-card .info-detail { font-size: 13px; color: #666; margin: 0; }
         .insight-accordion { display: grid; gap: 10px; margin-bottom: 14px; }
         .accordion-btn { width: 100%; border: 2px solid #e5e5e5; background: #fff; border-radius: 12px; padding: 12px; display: flex; justify-content: space-between; align-items: center; text-align: left; cursor: pointer; }
         .accordion-btn span { font-size: 15px; font-weight: 800; color: #1a1a1a; }
@@ -1663,8 +2516,8 @@ export default function Dashboard() {
         .category-amount { text-align: right; }
         .category-amount strong { font-size: 18px; color: #1a1a1a; display: block; }
         .category-amount span { font-size: 12px; color: #666; }
-        .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid #e5e5e5; display: grid; grid-template-columns: repeat(5, 1fr); padding: 8px 0; box-shadow: 0 -2px 10px rgba(0,0,0,0.05); }
-        .bottom-nav button { background: none; border: none; display: flex; flex-direction: column; align-items: center; gap: 4px; color: #999; cursor: pointer; padding: 8px; }
+.bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid #e5e5e5; display: grid; grid-template-columns: repeat(7, 1fr); padding: 4px 0; box-shadow: 0 -2px 10px rgba(0,0,0,0.05); }
+        .bottom-nav button { background: none; border: none; display: flex; flex-direction: column; align-items: center; gap: 2px; color: #999; cursor: pointer; padding: 4px; }
         .bottom-nav button span { font-size: 24px; }
         .bottom-nav button small { font-size: 11px; font-weight: 600; }
         .bottom-nav button.active { color: #00A86B; }
@@ -1708,6 +2561,72 @@ export default function Dashboard() {
           .mobile-view { border-radius: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.15); }
           .bottom-nav { position: sticky; }
         }
+        /* Split Tab Styles */
+        .split-summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+        .split-summary-card { background: #fff; border: 2px solid #e5e5e5; border-radius: 14px; padding: 14px; display: flex; align-items: center; gap: 12px; }
+        .split-summary-card.owed { border-color: #8ed6bb; }
+        .split-summary-card.owe { border-color: #f6b0b0; }
+        .split-summary-icon { font-size: 28px; }
+        .split-summary-card p { font-size: 12px; color: #777; margin: 0 0 4px; }
+        .split-summary-card strong { font-size: 18px; color: #1a1a1a; }
+        .split-actions { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 16px; }
+        .split-action-btn { padding: 12px; background: #fff; border: 2px solid #e5e5e5; border-radius: 12px; font-size: 13px; font-weight: 600; color: #333; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; }
+        .split-action-btn.primary { background: #00A86B; border-color: #00A86B; color: #fff; }
+        .split-action-btn:hover { border-color: #00A86B; }
+        .split-filter-bar { display: flex; justify-content: space-between; align-items: center; background: #f8f9fa; padding: 10px 14px; border-radius: 10px; margin-bottom: 14px; font-size: 13px; }
+        .split-filter-bar span { color: #666; }
+        .split-filter-bar button { background: none; border: none; color: #00A86B; font-weight: 600; cursor: pointer; }
+        .split-list { display: grid; gap: 14px; }
+        .split-card { background: #fff; border: 2px solid #e5e5e5; border-radius: 16px; padding: 16px; }
+        .split-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; }
+        .split-card-title { display: flex; gap: 12px; align-items: center; }
+        .split-category-emoji { font-size: 24px; }
+        .split-card-title h4 { font-size: 16px; font-weight: 700; color: #1a1a1a; margin: 0 0 4px; }
+        .split-meta { font-size: 12px; color: #777; margin: 0; }
+        .split-status { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 20px; }
+        .split-status.pending { background: #fff8e6; color: #a66c00; }
+        .split-status.settled { background: #e8f5e9; color: #2e7d32; }
+        .split-card-amount { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; background: #f8f9fa; border-radius: 12px; margin-bottom: 14px; }
+        .split-total, .split-your-share { text-align: center; }
+        .split-card-amount span { font-size: 12px; color: #777; display: block; margin-bottom: 4px; }
+        .split-card-amount strong { font-size: 16px; color: #1a1a1a; }
+        .split-participants-label { font-size: 12px; font-weight: 600; color: #666; margin: 0 0 10px; display: flex; justify-content: space-between; align-items: center; }
+        .toggle-participants-btn { background: none; border: none; color: #00A86B; font-size: 11px; font-weight: 600; cursor: pointer; padding: 4px 8px; margin-left: 8px; }
+        .toggle-participants-btn:hover { text-decoration: underline; }
+        .split-participants-list { display: grid; gap: 8px; }
+        .split-participant { display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #f9f9f9; border-radius: 10px; }
+        .split-participant.paid { background: #e8f5e9; }
+        .split-participant.owner { background: #f0f7ff; }
+        .split-participant-info { display: flex; align-items: center; gap: 10px; }
+        .split-participant-avatar { width: 36px; height: 36px; border-radius: 50%; background: #e5e5e5; display: flex; align-items: center; justify-content: center; font-weight: 700; color: #666; }
+        .split-participant-details { display: flex; flex-direction: column; }
+        .split-participant-name { font-size: 13px; font-weight: 600; color: #333; display: flex; align-items: center; gap: 6px; }
+        .owner-badge { font-size: 10px; background: #00A86B; color: #fff; padding: 2px 6px; border-radius: 10px; }
+        .split-participant-share { font-size: 12px; color: #666; }
+        .split-settle-btn { padding: 8px 14px; border-radius: 8px; border: none; font-size: 12px; font-weight: 600; cursor: pointer; background: #00A86B; color: #fff; }
+        .split-settle-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .split-settle-btn.settled { background: #2e7d32; }
+        .empty-split-state { text-align: center; padding: 32px 16px; background: #f8f9fa; border-radius: 16px; }
+        .empty-split-state .empty-icon { font-size: 48px; display: block; margin-bottom: 12px; }
+        .empty-split-state p { font-size: 14px; color: #666; margin: 0 0 14px; }
+        .empty-split-state button { padding: 12px 24px; background: #00A86B; color: #fff; border: none; border-radius: 10px; font-weight: 600; cursor: pointer; }
+        /* Invoice Modal Styles */
+        .invoice-items-section { margin-bottom: 12px; }
+        .invoice-items-label { font-size: 14px; font-weight: 600; color: #333; margin: 0 0 10px; }
+        .invoice-item-row { display: grid; grid-template-columns: 1fr 60px 80px 36px; gap: 6px; margin-bottom: 8px; align-items: start; }
+        .invoice-item-row input { margin-bottom: 0; }
+        .invoice-qty, .invoice-price { width: 100%; padding: 10px; border: 2px solid #e5e5e5; border-radius: 8px; font-size: 13px; }
+        .remove-item-btn { width: 36px; height: 36px; padding: 0; background: #ffebee; color: #c62828; border: none; border-radius: 8px; font-size: 18px; font-weight: 700; cursor: pointer; }
+        .add-item-btn { width: 100%; padding: 10px; background: #f5f5f5; color: #333; border: 2px dashed #ccc; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; margin-top: 4px; }
+        .add-item-btn:hover { background: #f0f0f0; }
+        .invoice-totals-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+        .invoice-tax, .invoice-discount { width: 100%; padding: 10px; border: 2px solid #e5e5e5; border-radius: 8px; font-size: 13px; }
+        .goal-meta { margin-bottom: 12px; }
+        .goal-meta p { font-size: 13px; color: #666; margin: 4px 0; }
+        .goal-date { font-size: 12px; color: #777; margin-top: 8px; }
+        .goal-status { font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 20px; }
+        .goal-status.paid { background: #e8f5e9; color: #2e7d32; }
+        .goal-status.pending { background: #fff8e6; color: #a66c00; }
       `}</style>
     </div>
   )
