@@ -2,8 +2,11 @@
   "name": "Owomi - The Truth-Teller",
   "short_name": "Owomi",
   "description": "Nigerian personal finance tracker that shows where your money is leaking",
+  "id": "/",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "portrait",
   "background_color": "#00A86B",
   "theme_color": "#00A86B",
   "icons": [
