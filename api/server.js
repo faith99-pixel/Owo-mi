@@ -10,14 +10,10 @@ const transactionRoutes = require('./routes/transactions');
 const virtualAccountRoutes = require('./routes/virtualAccount');
 const paymentRoutes = require('./routes/payments');
 const expenseSplitRoutes = require('./routes/expenseSplit');
-const debtRoutes = require('./routes/debts');
 const financialGoalRoutes = require('./routes/financialGoals');
-const sinkingFundRoutes = require('./routes/sinkingFunds');
-const subscriptionRoutes = require('./routes/subscriptions');
-const budgetCapRoutes = require('./routes/budgetCaps');
-const investmentRoutes = require('./routes/investments');
-const invoiceRoutes = require('./routes/invoices');
-const utilityRoutes = require('./routes/utility');
+// Combined routes (reducing serverless functions for Vercel Hobby plan)
+const trackingRoutes = require('./routes/tracking'); // debts + subscriptions + sinkingFunds + budgetCaps
+const portfolioRoutes = require('./routes/portfolio'); // investments + invoices + utility
 
 const app = express();
 
@@ -37,14 +33,10 @@ app.use('/api/transactions', transactionRoutes);
 app.use('/api/virtual-account', virtualAccountRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/expense-split', expenseSplitRoutes);
-app.use('/api/debts', debtRoutes);
 app.use('/api/financial-goals', financialGoalRoutes);
-app.use('/api/sinking-funds', sinkingFundRoutes);
-app.use('/api/subscriptions', subscriptionRoutes);
-app.use('/api/budget-caps', budgetCapRoutes);
-app.use('/api/investments', investmentRoutes);
-app.use('/api/invoices', invoiceRoutes);
-app.use('/api/utility', utilityRoutes);
+// Combined routes
+app.use('/api/tracking', trackingRoutes); // debts, subscriptions, sinking-funds, budget-caps
+app.use('/api/portfolio', portfolioRoutes); // investments, invoices, utility
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Owo Mi API is running', database: 'MongoDB' });
@@ -67,3 +59,4 @@ mongoose
   });
 
 module.exports = app;
+
