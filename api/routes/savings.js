@@ -147,11 +147,44 @@ router.post('/goals/:id/withdraw', auth, async (req, res) => {
 
 router.delete('/goals/:id', auth, async (req, res) => {
   try {
-    const goal = await SavingsGoal.findOneAndDelete({ _id: req.params.id, userId: req.userId });
+    const goal = await SavingsGoal.findOne({ _id: req.params.id, userId: req.userId });
     if (!goal) {
       return res.status(404).json({ error: 'Goal not found' });
     }
-    res.json({ message: 'Goal deleted' });
+
+    // Refund the saved amount back to user's wallet
+    const user = await User.findById(req.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const refundAmount = goal.currentAmount || 0;
+    if (refundAmount > 0) {
+      // Add the saved amount back to wallet and subtract from savings
+      user.walletBalance += refundAmount;
+      user.savingsBalance = Math.max(0, user.savingsBalance - refundAmount);
+      await user.save();
+
+      // Create a transaction record for the refund
+      await Transaction.create({
+        userId: user._id,
+        type: 'credit',
+        amount: refundAmount,
+        category: 'REFUND',
+        description: `Refunded from deleted goal: ${goal.title}`,
+        reference: `REF-${Date.now()}`,
+        balanceBefore: user.walletBalance - refundAmount,
+        balanceAfter: user.walletBalance
+      });
+    }
+
+    // Delete the goal
+    await SavingsGoal.findByIdAndDelete(req.params.id);
+    
+    res.json({ 
+      message: 'Goal deleted', 
+      refundedAmount: refundAmount 
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
